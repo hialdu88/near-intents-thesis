@@ -664,12 +664,17 @@
     const proLine = pace.proration != null
       ? ("Pro-rata needed by " + pace.lastDay + " (day " + pace.days + " of 92): " + fmtB(pace.proration) + ". Revenue so far: " + fmtB(c.q4rev) + ".")
       : "";
+    const wayPct = ((c.q4progress || 0) * 100).toFixed(1);
+    const head = !pace.known
+      ? (wayPct + "% of the way to 15%")
+      : ((pace.onTrack ? "On track: " : "Not on track: ") + wayPct + "% of the way to 15%");
+    const barCls = !pace.known ? " wait" : (pace.onTrack ? " ontrack" : " risk");
     return '<div class="q4-hero">' +
       '<div class="card hero-main"' + tip(method) + '>' +
         '<h3>Q4 2026 coverage test, at a frozen $3.51</h3>' +
-        '<div class="q4-stat">' + fmtPct(c.q4cov) + " of issuance so far</div>" +
-        '<div class="progress' + ((c.q4cov != null && c.q4cov < 0.15) ? " risk" : "") + '"><span style="width:' + Math.min(100, (c.q4progress || 0) * 100).toFixed(1) + '%"></span></div>' +
-        '<p class="progress-label">' + fmtB(c.q4rev) + " of " + fmtB(Q4_NEEDED) + " needed to reach 15% coverage (" + ((c.q4progress || 0) * 100).toFixed(1) + "% of the way). " +
+        '<div class="q4-stat">' + esc(head) + "</div>" +
+        '<div class="progress' + barCls + '"><span style="width:' + Math.min(100, (c.q4progress || 0) * 100).toFixed(1) + '%"></span></div>' +
+        '<p class="progress-label">' + fmtPct(c.q4cov) + " of issuance so far. " + fmtB(c.q4rev) + " of " + fmtB(Q4_NEEDED) + " needed to reach 15% coverage (" + wayPct + "% of the way). " +
         esc(monthsText) + " " + esc(proLine) + " " + badge + "</p>" +
         '<p class="note">' + esc(method) + "</p>" +
       "</div>" +
