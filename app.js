@@ -85,7 +85,8 @@
     ["kill", "Kill-rule monitor"],
     ["claims", "Claims ledger"],
     ["chain", "Base chain"],
-    ["scenarios", "Scenarios"],
+    ["scenarios", "Scenario model"],
+    ["leadlag", "Lead / lag"],
     ["sources", "Sources and method"]
   ];
 
@@ -100,7 +101,12 @@
     cgCoin: "https://api.coingecko.com/api/v3/coins/near?localization=false&tickers=false&community_data=false&developer_data=false&sparkline=false",
     explorer: "https://explorer.near-intents.org/api/v0/transactions",
     revenuePage: "https://revenue.near.org",
-    rpc: "https://rpc.mainnet.near.org"
+    rpc: "https://rpc.mainnet.near.org",
+    llamaPrice: "https://coins.llama.fi/chart/coingecko:near?period=1d&span=500",
+    buybackAcct: "buybacks.multisignature.near",
+    nearblocksAcct: "https://api.nearblocks.io/v1/account/buybacks.multisignature.near",
+    nearblocksTx: "https://api.nearblocks.io/v1/account/buybacks.multisignature.near/txns?per_page=8",
+    claimsFile: "data/claims_results.json"
   };
 
   let cache = {};
@@ -117,6 +123,10 @@
     base: { vol: 6e9, take: 5 },
     bull: { vol: 10e9, take: 7 }
   };
+  let model = { vol: 6e9, take: 5, price: 3.51, cap: CAP_HSP, growth: 0 };
+  let claimsFile = null;
+  let claimsFileError = null;
+  let hashSyncing = false;
 
   if (theme === "dark") document.documentElement.classList.add("dark");
 
@@ -246,11 +256,14 @@
       recordStatus(name, url + " " + method, true, cache[name].detail || "cached", cache[name].at, false, null);
       return cache[name].data;
     }
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15000);
     try {
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jsonrpc: "2.0", id: "dash", method: method, params: params })
+        body: JSON.stringify({ jsonrpc: "2.0", id: "dash", method: method, params: params }),
+        signal: ctrl.signal
       });
       if (!res.ok) throw new Error("HTTP " + res.status);
       const data = await res.json();
@@ -261,6 +274,8 @@
     } catch (err) {
       recordStatus(name, url + " " + method, false, "failed", Date.now(), true, String(err && err.message ? err.message : err));
       return null;
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -393,6 +408,21 @@
         b.inflation = { v: r[0] / r[1], src: "NEAR RPC EXPERIMENTAL_protocol_config max_inflation_rate " + r[0] + "/" + r[1], live: true, at: raw.times.proto };
       }
     }
+    if (raw.buyback && raw.buyback.amount) {
+      const n = yoctoToNear(raw.buyback.amount);
+      if (n != null) {
+        b.buybackWallet = { v: n, src: "NEAR RPC query view_account buybacks.multisignature.near, amount / 1e24", live: true, at: raw.times.buyback };
+      }
+    }
+    b.llamaPrices = null;
+    const llamaCoin = raw.llamaPrice && raw.llamaPrice.coins && raw.llamaPrice.coins["coingecko:near"];
+    if (llamaCoin && llamaCoin.prices) {
+      b.llamaPrices = { v: llamaCoin.prices, src: "DefiLlama coins chart coingecko:near, period=1d", live: true, at: raw.times.llamaPrice };
+    }
+    b.buybackTxns = null;
+    if (raw.nearblocksTx && raw.nearblocksTx.txns) {
+      b.buybackTxns = { v: raw.nearblocksTx.txns, src: "NearBlocks public API account txns, keyless, latest page only", live: true, at: raw.times.nearblocksTx };
+    }
     b.live = !!(vol && rev && fees);
     return b;
   }
@@ -441,6 +471,8 @@
     el("refreshBtn").disabled = true;
     el("statusPill").textContent = "loading";
     el("statusPill").className = "pill";
+    const main = el("main-content");
+    if (main) main.classList.add("is-loading");
     const opt = { force: !!force };
     const tasks = {
       vol: fetchJSON("vol", ENDPOINTS.vol, Object.assign({ summarize: d => "30d " + fmtB(d.total30d) }, opt)),
@@ -451,11 +483,15 @@
       chains: fetchJSON("chains", ENDPOINTS.chains, Object.assign({ summarize: d => Array.isArray(d) ? d.length + " chains" : "ok" }, opt)),
       cgPrice: fetchJSON("cgPrice", ENDPOINTS.cgPrice, Object.assign({ summarize: d => d.near ? "NEAR " + fmtPx(d.near.usd) : "ok" }, opt)),
       cgCoin: fetchJSON("cgCoin", ENDPOINTS.cgCoin, Object.assign({ summarize: d => d.market_data ? "supply " + fmtN(d.market_data.circulating_supply) : "ok" }, opt)),
+      llamaPrice: fetchJSON("llamaPrice", ENDPOINTS.llamaPrice, Object.assign({ summarize: d => { const c = d && d.coins && d.coins["coingecko:near"]; return c && c.prices ? c.prices.length + " daily prices" : "ok"; } }, opt)),
+      nearblocksTx: fetchJSON("nearblocksTx", ENDPOINTS.nearblocksTx, Object.assign({ timeout: 8000, summarize: d => d && d.txns ? d.txns.length + " recent txns" : "ok" }, opt)),
+      claimsFileFetch: loadClaimsFile(opt),
       block: fetchRPC("block", "block", { finality: "final" }),
-      proto: fetchRPC("proto", "EXPERIMENTAL_protocol_config", { finality: "final" })
+      proto: fetchRPC("proto", "EXPERIMENTAL_protocol_config", { finality: "final" }),
+      buyback: fetchRPC("buyback", "query", { request_type: "view_account", finality: "final", account_id: ENDPOINTS.buybackAcct })
     };
-    recordStatus("BigQuery", "bigquery-public-data.crypto_near_mainnet_us", false, "offline query, see repo", Date.now(), true, "Not callable from a browser.");
-    recordStatus("revenue.near.org", ENDPOINTS.revenuePage, false, "page marks figures illustrative; no public JSON used", Date.now(), true, "Not fetched as a structured API. Buyback wallet uses the snapshot.");
+    recordStatus("BigQuery", "bigquery-public-data.crypto_near_mainnet_us", false, "offline query, see repo; skipped by request", Date.now(), true, "Not callable from a browser. Ex-HOT signers, HOT share and measured issuance stay unmeasured.");
+    recordStatus("revenue.near.org", ENDPOINTS.revenuePage, false, "page marks figures illustrative; no public JSON used", Date.now(), true, "Not fetched as a structured API. The buyback balance uses NEAR RPC when that call works.");
     if (!jwt) {
       recordStatus("Explorer 1Click", ENDPOINTS.explorer, false, "no JWT; showing snapshot", Date.now(), true, "Key not entered.");
     }
@@ -469,8 +505,9 @@
     if (jwt) fetchExplorer();
     current = mergeLive(raw);
     lastOk = Date.now();
-    const liveCount = statusRows.filter(r => r.ok && !r.usedSnapshot).length;
-    const failCount = statusRows.filter(r => !r.ok).length;
+    const unused = new Set(["BigQuery", "revenue.near.org", "Explorer 1Click", "claims_results.json"]);
+    const liveCount = statusRows.filter(r => r.ok && !r.usedSnapshot && !unused.has(r.name)).length;
+    const failCount = statusRows.filter(r => !r.ok && !unused.has(r.name)).length;
     let pill = "all live", cls = "pill live";
     if (liveCount === 0) { pill = "offline, snapshot 13 Nov 2026"; cls = "pill offline"; }
     else if (failCount > 0) { pill = "partly snapshot"; cls = "pill partial"; }
@@ -478,6 +515,7 @@
     el("statusPill").className = cls;
     el("updatedPill").textContent = "last updated: " + isoTime(lastOk);
     el("refreshBtn").disabled = false;
+    if (main) main.classList.remove("is-loading");
     renderAll();
   }
 
@@ -502,7 +540,8 @@
   }
 
   function chartDefaults() {
-    Chart.defaults.font.family = "IBM Plex Sans, Segoe UI, sans-serif";
+    if (typeof Chart === "undefined") return;
+    Chart.defaults.font.family = "Segoe UI, system-ui, sans-serif";
     Chart.defaults.color = muted();
     Chart.defaults.borderColor = gridCol();
     Chart.defaults.plugins.legend.display = false;
@@ -520,7 +559,7 @@
   function makeChart(id, cfg) {
     killChart(id);
     const canvas = el(id);
-    if (!canvas) return;
+    if (!canvas || typeof Chart === "undefined") return;
     charts[id] = new Chart(canvas, cfg);
     return charts[id];
   }
@@ -664,12 +703,357 @@
     ];
   }
 
+
+  const CLAIMS_TOLERANCE =
+    "Dashboard rule, not a tolerance published in the thesis or brief. Green if the absolute relative difference |live-frozen|/|frozen| is at most 5%. Amber if it is more than 5% and at most 15%. Red if it is more than 15%. Unmeasured claims are not graded. Holders revenue is summed through 3 Nov 2026. 30-day coverage is retested at $3.51 and 1.312B supply.";
+
+  function relDiff(live, frozen) {
+    if (live == null || frozen == null || !isFinite(live) || !isFinite(frozen) || frozen === 0) return null;
+    return Math.abs(live - frozen) / Math.abs(frozen);
+  }
+  function gradeRel(live, frozen) {
+    const d = relDiff(live, frozen);
+    if (d == null) return "unmeasured";
+    if (d <= 0.05) return "green";
+    if (d <= 0.15) return "amber";
+    return "red";
+  }
+  function fmtClaimVal(v, unit) {
+    if (v == null || (typeof v === "number" && !isFinite(v))) return "n/a";
+    if (unit === "USD") return fmtB(v);
+    if (unit === "bp") return fmtBp(v);
+    if (unit === "ratio") return fmtPct(v);
+    if (unit === "NEAR") return fmtN(v) + " NEAR";
+    if (unit === "multiple") return (typeof v === "number" ? v.toFixed(0) : v) + "x";
+    return String(v);
+  }
+  function statusBadge(st) {
+    const s = (st || "unmeasured").toLowerCase();
+    return tag(s, s);
+  }
+
+  async function loadClaimsFile(opt) {
+    const url = ENDPOINTS.claimsFile;
+    try {
+      const res = await fetch(url, { cache: (opt && opt.force) ? "no-store" : "default", headers: { Accept: "application/json" } });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const data = await res.json();
+      claimsFile = data;
+      claimsFileError = null;
+      recordStatus("claims_results.json", url, true, "run " + (data.run_time || "ok") + ", " + ((data.claims && data.claims.length) || 0) + " claims", Date.now(), false, null);
+      return data;
+    } catch (err) {
+      claimsFile = null;
+      claimsFileError = String(err && err.message ? err.message : err);
+      recordStatus("claims_results.json", url, false, "missing; will compute in the browser", Date.now(), true, claimsFileError);
+      return null;
+    }
+  }
+
+  function holdersThrough(daily, endDay) {
+    if (!daily || !daily.length) return null;
+    let t = 0, n = 0;
+    daily.forEach(p => {
+      if (p.day && p.day <= endDay && p.v != null) { t += p.v; n++; }
+    });
+    return n ? t : null;
+  }
+
+  function computeClaimsInBrowser(b, c) {
+    const frozenIss30 = FROZEN_SUPPLY * CAP_NOW * FROZEN_PRICE * 30 / 365;
+    const cov351 = coverage(b.rev30d && b.rev30d.v, frozenIss30);
+    const hold = holdersThrough(b.dailyHold, "2026-11-03");
+    const months = b.months || [];
+    const by = {};
+    months.forEach(r => { by[r.m] = r; });
+    const sep = by["2026-09"];
+    const q3 = ["2026-07", "2026-08", "2026-09"].map(m => by[m]);
+    const q3ok = q3.every(Boolean);
+    const q3vol = q3ok ? q3.reduce((s, r) => s + (r.vol || 0), 0) : null;
+    const q3fees = q3ok && q3.every(r => r.fees != null) ? q3.reduce((s, r) => s + r.fees, 0) : null;
+    const q3rev = q3ok && q3.every(r => r.rev != null) ? q3.reduce((s, r) => s + r.rev, 0) : null;
+    const mk = (id, name, frozen, live, unit, source, note, status) => ({
+      id, claim: name, frozen_value: frozen, live_value: live, unit,
+      status: status || gradeRel(live, frozen),
+      relative_difference: relDiff(live, frozen),
+      source, note: note || ""
+    });
+    const claims = [
+      mk("vol_30d", "Intents volume, 30 days", SNAP.vol30d, b.vol30d.v, "USD", b.vol30d.src),
+      mk("vol_all", "Intents volume, all-time", SNAP.volAllTime, b.volAllTime.v, "USD", b.volAllTime.src),
+      mk("fees_30d", "Gross fees, 30 days", SNAP.fees30d, b.fees30d.v, "USD", b.fees30d.src),
+      mk("fees_all", "Gross fees, all-time", SNAP.feesAllTime, b.feesAllTime.v, "USD", b.feesAllTime.src),
+      mk("rev_30d", "Protocol revenue, 30 days", SNAP.rev30d, b.rev30d.v, "USD", b.rev30d.src),
+      mk("rev_all", "Protocol revenue, all-time", SNAP.revAllTime, b.revAllTime.v, "USD", b.revAllTime.src),
+      mk("holders_to_3nov", "Holders revenue (buybacks), cumulative to 3 Nov 2026", SNAP.holdersAllTime, hold, "USD", "DefiLlama dailyHoldersRevenue summed through 3 Nov 2026"),
+      mk("take_30d", "Take rate, 30 days", 4.88, c.take, "bp", "protocol revenue / volume, in basis points"),
+      mk("capture_30d", "Capture, 30 days", 0.3041, c.cap, "ratio", "protocol revenue / gross fees", "Frozen 30.41% is $1.84M / $6.05M. The published headline was 30.5%."),
+      mk("coverage_30d_at_351", "Coverage of issuance, 30 days, at $3.51", 0.19445, cov351, "ratio", "30-day revenue / (1.312B x 2.5% x $3.51 x 30/365)", "Retested at the frozen price so a live price move does not decide it."),
+      mk("vol_2026_09", "Record month, September 2026 volume", RECORD_VOL, sep ? sep.vol : null, "USD", "monthly volume from the DefiLlama daily series"),
+      mk("q3_vol", "Q3 2026 Intents volume", 9.79e9, q3vol, "USD", "sum of July-September monthly volume"),
+      mk("q3_capture", "Q3 2026 capture", 0.212, (q3rev != null && q3fees) ? q3rev / q3fees : null, "ratio", "Q3 revenue / Q3 fees"),
+      mk("q3_take", "Q3 2026 take rate", 3.14, (q3rev != null && q3vol) ? takeBp(q3rev, q3vol) : null, "bp", "Q3 revenue / Q3 volume, in basis points"),
+      mk("q3_coverage", "Q3 2026 coverage of issuance at $3.51", 0.107, q3rev != null ? coverage(q3rev, Q4_ISSUANCE) : null, "ratio", "Q3 revenue / quarterly issuance at $3.51 and 2.5%"),
+      mk("buyback_wallet", "Buyback wallet balance", SNAP.buybackWalletNear, b.buybackWallet && b.buybackWallet.v, "NEAR", (b.buybackWallet && b.buybackWallet.src) || "NEAR RPC view_account", "The 1.77M figure is an illustrative snapshot from revenue.near.org, not a chain-verified total bought."),
+      mk("ex_hot_signers", "Ex-HOT daily signers", null, null, "", "BigQuery skipped by request", "Needs a Google Cloud account. Marked unmeasured.", "unmeasured"),
+      mk("hot_share", "HOT Wallet share of transactions", null, null, "", "BigQuery skipped by request", "65% in Q2 2026 is a secondary Nansen figure and is not retested here.", "unmeasured"),
+      mk("measured_issuance", "Measured issuance from chain data", null, null, "", "BigQuery skipped by request", "RPC total supply is shown on the base-chain view when the call works. Issuance per epoch is not derived from it.", "unmeasured"),
+      mk("first_draft_coverage", "First-draft coverage, 30 days", 0.25, 0.19, "ratio", "historical first draft vs 13 Nov pull", "Historical miss, not a live retest.", "record"),
+      mk("first_draft_valuation", "First-draft valuation multiple", 161, 205, "multiple", "historical first draft vs 13 Nov pull at $4.61B", "Historical miss, not a live retest. Valuation never blocks a check.", "record")
+    ];
+    return {
+      run_time: new Date().toISOString(),
+      tolerance_rule: CLAIMS_TOLERANCE,
+      frozen_as_of: SNAPSHOT_DATE,
+      computed_in_browser: true,
+      claims
+    };
+  }
+
+  function pearson(x, y) {
+    const n = x.length;
+    if (n < 3) return null;
+    let sx = 0, sy = 0;
+    for (let i = 0; i < n; i++) { sx += x[i]; sy += y[i]; }
+    const mx = sx / n, my = sy / n;
+    let num = 0, dx = 0, dy = 0;
+    for (let i = 0; i < n; i++) {
+      const vx = x[i] - mx, vy = y[i] - my;
+      num += vx * vy; dx += vx * vx; dy += vy * vy;
+    }
+    const den = Math.sqrt(dx * dy);
+    if (!isFinite(den) || den === 0) return null;
+    return num / den;
+  }
+
+  function monthlyAvgPrices(pairs) {
+    const by = {};
+    (pairs || []).forEach(row => {
+      let ts, px;
+      if (Array.isArray(row) && row.length >= 2) { ts = Number(row[0]); px = Number(row[1]); }
+      else if (row && typeof row === "object") { ts = Number(row.timestamp); px = Number(row.price); }
+      else return;
+      if (!isFinite(ts) || !isFinite(px)) return;
+      if (ts < 1e12) ts *= 1000;
+      const d = new Date(ts);
+      const k = d.getUTCFullYear() + "-" + String(d.getUTCMonth() + 1).padStart(2, "0");
+      if (!by[k]) by[k] = { sum: 0, n: 0 };
+      by[k].sum += px; by[k].n += 1;
+    });
+    const out = {};
+    Object.keys(by).forEach(k => { out[k] = { avg: by[k].sum / by[k].n, n: by[k].n }; });
+    return out;
+  }
+
+  function leadLagResult(b) {
+    if (!b.llamaPrices || !b.llamaPrices.v) return { ok: false, reason: "No DefiLlama coins chart is loaded yet." };
+    const px = monthlyAvgPrices(b.llamaPrices.v);
+    const all = (b.months || []).filter(r => r.vol != null && px[r.m]).sort((a, c) => a.m.localeCompare(c.m));
+    const skipped = all.filter(r => px[r.m].n < 28).map(r => r.m + " (" + px[r.m].n + " price days)");
+    const months = all.filter(r => px[r.m].n >= 28);
+    if (months.length < 4) return { ok: false, reason: "Fewer than four overlapping complete months of volume and price.", n: months.length, skipped };
+    const keys = months.map(r => r.m);
+    const vols = months.map(r => r.vol);
+    const prices = months.map(r => px[r.m].avg);
+    const lags = [0, 1, 2, 3].map(k => {
+      const x = [], y = [];
+      for (let i = 0; i + k < vols.length; i++) { x.push(vols[i]); y.push(prices[i + k]); }
+      return { k, r: pearson(x, y), n: x.length };
+    });
+    return { ok: true, keys, vols, prices, lags, src: b.llamaPrices.src, at: b.llamaPrices.at, nMonths: months.length, skipped };
+  }
+
+  function leadLagPlain(res) {
+    if (!res || !res.ok) return res && res.reason ? res.reason : "The test could not be run.";
+    const usable = res.lags.filter(x => x.r != null && x.n >= 4);
+    if (!usable.length) return "The sample is too small to state a correlation.";
+    const best = usable.slice().sort((a, b) => Math.abs(b.r) - Math.abs(a.r))[0];
+    const r0 = res.lags[0].r;
+    const strength = Math.abs(best.r) < 0.3 ? "weak" : (Math.abs(best.r) < 0.6 ? "moderate" : "strong");
+    const sign = best.r >= 0 ? "positive" : "negative";
+    let line = "Over " + res.nMonths + " complete overlapping months, the largest absolute correlation is a " + strength + " " + sign + " relationship at lag " + best.k + " (r = " + best.r.toFixed(2) + ", n = " + best.n + ").";
+    if (best.k === 0) line += " That is a same-month relationship, not evidence that volume leads price.";
+    else line += " Lag k is the correlation of monthly volume with the average NEAR price k months later (volume as the leading series).";
+    if (Math.abs(best.r) < 0.3) line += " In plain language, this sample does not show a strong link between monthly Intents volume and the later NEAR price.";
+    else if (r0 != null && Math.abs(r0) >= Math.abs(best.r) - 0.05) line += " Volume and price mostly moved together in the same month.";
+    line += " A sample this small can flip sign with one more month. This is a new test of volume versus price, not the thesis H1 test of Intents volume versus chain activity.";
+    return line;
+  }
+
+  function modelOut(m) {
+    const take = m.take / 10000;
+    const annualIss = FROZEN_SUPPLY * m.cap * m.price;
+    const annualRev0 = m.vol * take * 12;
+    const cov0 = annualIss ? annualRev0 / annualIss : null;
+    const g = m.growth;
+    let pass = { already: false, never: false, years: null, calendarYear: null, reason: "" };
+    if (cov0 != null && cov0 >= 1) {
+      pass = { already: true, never: false, years: 0, calendarYear: new Date().getUTCFullYear(), reason: "Already at or above 100% coverage at the current run rate, with price, take rate and the issuance cap held fixed." };
+    } else if (!take || !m.vol) {
+      pass = { already: false, never: true, years: null, calendarYear: null, reason: "Volume or take rate is zero, so coverage stays at zero." };
+    } else if (g <= 0) {
+      pass = { already: false, never: true, years: null, calendarYear: null, reason: "At zero growth, buybacks do not pass issuance at these settings. The default growth rate is 0 because the thesis does not publish a growth rate to use." };
+    } else {
+      const need = annualIss / annualRev0;
+      const years = Math.log(need) / Math.log(1 + g);
+      if (!isFinite(years) || years > 50) {
+        pass = { already: false, never: true, years: years, calendarYear: null, reason: "Would take more than 50 years at this annual volume growth rate, with price, take rate and the issuance cap held fixed." };
+      } else {
+        const cal = new Date().getUTCFullYear() + years;
+        pass = { already: false, never: false, years: years, calendarYear: cal, reason: "Years are counted from today, holding price, take rate and the issuance cap fixed, and growing monthly volume at the stated annual rate." };
+      }
+    }
+    return { annualIss, annualRev0, cov0, pass };
+  }
+
+  function modelQuery() {
+    return "&vol=" + model.vol + "&take=" + model.take + "&price=" + model.price + "&cap=" + model.cap + "&growth=" + model.growth;
+  }
+  function viewHash(id) {
+    return "#" + id + (id === "scenarios" ? modelQuery() : "");
+  }
+  function parseHash() {
+    const raw = (location.hash || "#overview").replace(/^#/, "");
+    const parts = raw.split("&");
+    const id = parts[0] || "overview";
+    const params = {};
+    parts.slice(1).forEach(p => {
+      const i = p.indexOf("=");
+      if (i > 0) params[decodeURIComponent(p.slice(0, i))] = decodeURIComponent(p.slice(i + 1).replace(/\+/g, " "));
+    });
+    return { id: VIEWS.some(v => v[0] === id) ? id : "overview", params };
+  }
+  function applyModelParams(params) {
+    if (!params) return;
+    const n = (k) => { const v = Number(params[k]); return isFinite(v) ? v : null; };
+    const vol = n("vol"); if (vol != null && vol > 0) model.vol = vol;
+    const take = n("take"); if (take != null && take > 0) model.take = take;
+    const price = n("price"); if (price != null && price > 0) model.price = price;
+    const cap = n("cap"); if (cap === CAP_NOW || cap === CAP_HSP) model.cap = cap;
+    const growth = n("growth"); if (growth != null && growth >= 0) model.growth = growth;
+  }
+  function currentViewId() {
+    const v = document.querySelector(".view.active");
+    return v ? v.id.replace("view-", "") : "overview";
+  }
+  function closeNav() {
+    const side = el("sidebar");
+    if (side) side.classList.remove("open");
+    const bd = el("navBackdrop");
+    if (bd) { bd.classList.remove("show"); bd.hidden = true; }
+  }
+  function openNav() {
+    const side = el("sidebar");
+    if (side) side.classList.add("open");
+    const bd = el("navBackdrop");
+    if (bd) { bd.hidden = false; bd.classList.add("show"); }
+  }
+
+  function renderJudgeSummary(b, c) {
+    const pace = q4Pace(b, c);
+    const cov351 = coverage(b.rev30d.v, FROZEN_SUPPLY * CAP_NOW * FROZEN_PRICE * 30 / 365);
+    const volPct = Math.min(100, (b.vol30d.v / BULL_MONTHLY_VOL) * 100);
+    const takePct = Math.min(100, (c.take / BULL_TAKE_BP) * 100);
+    const q4label = !pace.known ? "Q4 pace not yet known" : (pace.onTrack ? "Q4 on track" : "Q4 not on track");
+    return '<section class="judge-summary card" aria-label="Summary for a 30-second read">' +
+      "<h3>For the judge, in 30 seconds</h3>" +
+      '<p class="bull-line"><strong>Bull case.</strong> If Intents holds about $10B a month at about 7 bp, yearly buybacks would be about $84M, or 114% of HSP-029 issuance at the frozen $3.51 price.</p>' +
+      '<div class="must-grid">' +
+        '<div class="must-item"><p class="k">What must be true: issuance cap</p><p class="v">HSP-029, 1.6% end state</p><p class="sub">Current cap is 2.5%. The proposal was approved on 2 Nov 2026. The manual swap is still pending.</p></div>' +
+        '<div class="must-item"' + tip("Take rate = 30-day protocol revenue / 30-day volume, in basis points. Target is the thesis bull case of about 7 bp.") + '><p class="k">What must be true: take rate</p><p class="v" id="must-take">' + fmtBp(c.take) + " now, vs about 7 bp</p>" +
+          '<div class="progress"><span id="must-take-bar" style="width:' + takePct.toFixed(1) + '%"></span></div></div>' +
+        '<div class="must-item"' + tip("Live 30-day Intents volume compared with the thesis bull case of about $10B a month. A 30-day window is not the same as a calendar month.") + '><p class="k">What must be true: volume</p><p class="v" id="must-vol">' + fmtB(b.vol30d.v) + " in 30 days, vs about $10B a month</p>" +
+          '<div class="progress"><span id="must-vol-bar" style="width:' + volPct.toFixed(1) + '%"></span></div></div>' +
+      "</div>" +
+      '<p class="kill-compact"><strong>Kill rules.</strong> All four quantitative rules fired in the first half of 2026: volume below $8B a quarter, capture below 20%, take rate below 3 bp, and coverage below 15%. Coverage gets no reset. Q3 cleared the first three; coverage did not.</p>' +
+      '<div class="today-row" id="today-row"><span><strong>Today.</strong></span>' +
+        "<span>30-day coverage at $3.51: <strong>" + fmtPct(cov351) + "</strong></span>" +
+        "<span>at the live price: <strong>" + fmtPct(c.cov) + "</strong></span>" +
+        "<span>take " + fmtBp(c.take) + "</span>" +
+        "<span>" + q4label + (pace.known ? " (" + fmtB(c.q4rev) + " of " + fmtB(Q4_NEEDED) + ")" : "") + "</span>" +
+        "<span>" + srcTag(b.vol30d) + " " + srcTag(b.rev30d) + "</span></div></section>";
+  }
+
+  function renderBuybackPanel(b) {
+    const w = b.buybackWallet;
+    const liveBal = w && w.v != null;
+    const mtm = (liveBal && b.price && b.price.v) ? w.v * b.price.v : null;
+    const hold = b.holdAllTime;
+    let txHtml = "";
+    if (b.buybackTxns && b.buybackTxns.v && b.buybackTxns.v.length) {
+      const rows = b.buybackTxns.v.slice(0, 8).map(tx => {
+        const hash = tx.transaction_hash || tx.hash || "";
+        const when = tx.block_timestamp ? isoTime(Number(String(tx.block_timestamp).slice(0, 13))) : (tx.block_date || "");
+        const actions = tx.actions || tx.transaction_actions || [];
+        let kind = (actions[0] && (actions[0].action || actions[0])) || tx.actions_agg || "txn";
+        if (typeof kind === "object") kind = kind.action || JSON.stringify(kind);
+        const pred = tx.predecessor_account_id || tx.signer_account_id || tx.receipt_predecessor_account_id || "";
+        let deposit = null;
+        const acts = Array.isArray(actions) ? actions : [];
+        acts.forEach(a => {
+          const d = a && (a.deposit || (a.data && a.data.deposit));
+          if (d) {
+            const n = yoctoToNear(String(d).replace(/\D/g, "") === String(d) ? String(d) : String(d));
+            if (n) deposit = (deposit || 0) + n;
+          }
+        });
+        return "<tr><td class='src-time'>" + esc(when) + "</td><td>" + esc(String(kind)) + "</td><td>" + esc(pred) + "</td><td class='num'>" + (deposit != null ? (fmtN(deposit) + " NEAR") : "n/a") + "</td><td>" + (hash ? ("<span class='mono'>" + esc(hash.slice(0, 10)) + "…</span>") : "") + "</td></tr>";
+      }).join("");
+      txHtml = '<p class="sub">Recent activity from the NearBlocks public API, latest page only. This is not a complete purchase history and is not summed into a total bought.</p>' +
+        "<table><thead><tr><th>Time (UTC)</th><th>Type</th><th>From</th><th>Attached</th><th>Hash</th></tr></thead><tbody>" + rows + "</tbody></table>";
+    } else {
+      const err = (statusRows.find(r => r.name === "nearblocksTx") || {}).error;
+      txHtml = '<p class="note">Recent activity was not loaded' + (err ? (" (" + esc(err) + ")") : " (NearBlocks public API was not reachable from this browser, which is often a CORS limit)") + ". The RPC balance was still checked when the RPC call succeeded.</p>";
+    }
+    const recon = "Not reconciled. DefiLlama holders revenue is a USD series" +
+      (hold && hold.v != null ? (" (all-time " + fmtB(hold.v) + (hold.live ? ", live" : ", snapshot, 13 Nov 2026") + ")") : "") +
+      ". The wallet balance is a current NEAR amount. Without a purchase-price series for each buy, a \"revenue in vs NEAR bought, gap X%\" figure cannot be computed honestly. The thesis notes that bought tokens sit in a permanent capital vehicle, so this wallet may be a pass-through and its current balance is not total NEAR bought." +
+      (mtm != null ? (" A mark-to-market of the current balance at the live price is " + fmtB(mtm) + ", shown only as a reference, not as cost or as total bought.") : "");
+    return '<div class="card" id="buyback-check" style="margin-bottom:12px"><h3>On-chain buyback check</h3>' +
+      '<p class="sub">NEAR RPC <span class="mono">view_account</span> for <span class="mono">buybacks.multisignature.near</span>. Recent transfers, if shown, come from the NearBlocks public API and are keyless.</p>' +
+      '<div class="kpis" style="margin:8px 0 12px">' +
+        kpiHTML("Wallet balance", liveBal ? (fmtN(w.v) + " NEAR") : "not fetched", w, liveBal && SNAP.buybackWalletNear ? "<span>illustrative snapshot on 13 Nov: " + fmtN(SNAP.buybackWalletNear) + " NEAR</span>" : "", SNAP.buybackWalletNear) +
+        kpiHTML("Mark-to-market of the current balance", mtm != null ? fmtB(mtm) : "n/a", { v: mtm, live: !!(liveBal && b.price.live), src: "wallet NEAR x live price. Not cost, not total bought.", at: w && w.at }) +
+        kpiHTML("Holders revenue, all-time", hold && hold.v != null ? fmtB(hold.v) : "n/a", hold, "<span>USD series, not NEAR bought</span>") +
+      "</div>" +
+      txHtml +
+      '<p class="note"><strong>Reconciliation:</strong> ' + esc(recon) + "</p></div>";
+  }
+
   function renderOverview() {
     const b = current, c = computed(b);
     const root = el("view-overview");
     const qs = completeQuarters(b);
-    root.innerHTML =
-      '<p class="lead">NEAR Intents is a growing settlement product whose fees now buy back about 19% of new issuance on the best recent 30 days, up from 5-11% on full quarters in 2026. The token case is still unproven: all four kill rules fired in the first half of 2026, and Q4 must clear 15% coverage at a frozen $3.51 price.</p>' +
+    const staticBox = el("overview-static");
+    if (staticBox) {
+      const mount = document.createElement("div");
+      mount.innerHTML = renderJudgeSummary(b, c);
+      const incoming = mount.querySelector(".judge-summary");
+      const currentJudge = staticBox.querySelector(".judge-summary");
+      if (incoming && currentJudge) {
+        const keep = currentJudge;
+        ["must-take", "must-vol", "must-take-bar", "must-vol-bar", "today-row"].forEach(id => {
+          const a = keep.querySelector("#" + id);
+          const bnode = incoming.querySelector("#" + id);
+          if (a && bnode) a.innerHTML = bnode.innerHTML;
+        });
+        const aBar = keep.querySelector("#must-take-bar");
+        const bBar = incoming.querySelector("#must-take-bar");
+        if (aBar && bBar) aBar.setAttribute("style", bBar.getAttribute("style") || "");
+        const aBar2 = keep.querySelector("#must-vol-bar");
+        const bBar2 = incoming.querySelector("#must-vol-bar");
+        if (aBar2 && bBar2) aBar2.setAttribute("style", bBar2.getAttribute("style") || "");
+      }
+    } else {
+      root.insertAdjacentHTML("afterbegin", renderJudgeSummary(b, c));
+    }
+    let rest = el("overview-rest");
+    if (!rest) {
+      rest = document.createElement("div");
+      rest.id = "overview-rest";
+      root.appendChild(rest);
+    }
+    rest.innerHTML =
       q4HeadlineHTML(b, c) +
       '<div class="trend-grid">' +
         '<div class="card chart-card"><h3>Take rate by month, since the fee switch</h3>' +
@@ -981,6 +1365,7 @@
     const risk = c.q4cov != null && c.q4cov < 0.15;
     root.innerHTML =
       '<p class="lead">Issuance is modelled at the frozen $3.51 price and 1.312B circulating supply so a live price move cannot rewrite the history or the Q4 test. Monthly issuance is $9.59M at 2.5% and $6.14M at 1.6%. The Q4 2026 coverage test uses $3.51, not the live price. 15% of the $28.78M quarterly issuance is $4.32M of protocol revenue.</p>' +
+      renderBuybackPanel(b) +
       '<div class="card chart-card" style="margin-bottom:12px"><h3>Protocol revenue is still well below modelled issuance</h3>' +
       '<p class="sub">Bars: monthly issuance at 2.5% and 1.6%, monthly protocol revenue, and holders revenue. Line: coverage of 2.5% issuance, with a 15% kill line.</p>' +
       '<div class="chart-wrap tall"><canvas id="cIss"></canvas></div></div>' +
@@ -1185,29 +1570,24 @@
 
   function renderClaims() {
     const b = current, c = computed(b);
-    const rows = [
-      ["Intents 30-day volume", fmtB(SNAP.vol30d), "not stated in the brief", "n/a", "n/a", fmtB(b.vol30d.v), "BASELINE", "Frozen from the 13 Nov pull. A claim cannot pass a test on the same data that set it. Live value is shown for comparison only."],
-      ["Intents volume, all-time", fmtB(SNAP.volAllTime), "not stated", "n/a", "n/a", fmtB(b.volAllTime.v), "BASELINE", "DefiLlama."],
-      ["Protocol revenue, 30 days", fmtB(SNAP.rev30d), "not stated", "n/a", "n/a", fmtB(b.rev30d.v), "BASELINE", "DefiLlama."],
-      ["Take rate, 30 days", "4.88 bp", "not stated", "below 3 bp for two quarters", "above 7 bp", fmtBp(c.take), "BASELINE", "Formula: revenue / volume x 10,000."],
-      ["Capture, 30 days", "30.5% published; 30.41% from $1.84M / $6.05M", "not stated", "below 20% for two quarters", "above 40% for a quarter", fmtPct(c.cap), "BASELINE", "Formula: revenue / gross fees."],
-      ["Coverage of issuance, 30 days", "about 19%", "first draft said 25% and missed", "Q4 below 15% at $3.51", "above 50% of issuance", fmtPct(c.cov), "BASELINE", "Live window uses the live price. The formal Q4 test uses $3.51."],
-      ["Q4 coverage to date at $3.51", "October delivered about half of the $4.32M needed", "n/a", "below 15% at quarter end", "n/a", fmtPct(c.q4cov) + " · " + fmtB(c.q4rev) + " of " + fmtB(Q4_NEEDED), "WATCH", "Single test at quarter end. The monitor marks this WATCH until Q4 closes if it is still below 15%."],
-      ["Valuation, best 30 days", "first draft 161x; primary pull 205x at $4.61B", "28% off the draft", "reference only", "reference only", (b.marketCap.v / (b.rev30d.v * 365 / 30)).toFixed(0) + "x", "DRIFTED", "The first draft missed on valuation. Valuation rows are for reference and never block a check. The 205x figure is the 13 Nov measurement at $4.61B."],
-      ["Coverage, first draft vs primary pull", "draft 25%; data 19%", "missed", "n/a", "n/a", "19% on the 13 Nov 30-day window", "DRIFTED", "One of two missed claims in the first draft. Six of eight testable claims held. The other six held claims were not itemised in the brief or the thesis PDF, so they are not invented here."],
-      ["Measured issuance from chain data", "untested", "n/a", "n/a", "n/a", b.rpcSupply.v ? ("total supply " + fmtN(b.rpcSupply.v) + " NEAR from RPC; issuance per epoch not derived") : "unmeasured", "UNMEASURED", "The first draft's ninth claim, measured issuance, is still untested. RPC total supply is shown when the call works. We do not invent an issuance figure from it."],
-      ["Ex-HOT daily signers", "unmeasured", "n/a", "below 40K", "n/a", "offline query, see repo", "UNMEASURED", "Needs BigQuery. No Google Cloud account was set up."],
-      ["HOT Wallet share of transactions", "65% in Q2 2026 (Nansen, secondary)", "n/a", "n/a", "n/a", "unmeasured in this dashboard", "UNMEASURED", "Secondary in the snapshot. Needs BigQuery to refresh."],
-      ["Explorer 1Click share of DefiLlama volume", "87% all-time, 67% 30-day", "n/a", "n/a", "n/a", fmtPct(SNAP.clickShareAT, 0) + " all-time, " + fmtPct(SNAP.clickShare30, 0) + " 30-day", "BASELINE", "Explorer API needs a partner JWT. Without it, the snapshot from the Explorer page is shown."],
-      ["Buyback wallet balance", "1.77M NEAR", "n/a", "n/a", "n/a", fmtN(SNAP.buybackWalletNear) + " NEAR", "BASELINE", "revenue.near.org marks its figures illustrative. Used only as a snapshot cross-check."]
-    ];
+    const fromFile = !!(claimsFile && claimsFile.claims && claimsFile.claims.length);
+    const pack = fromFile ? claimsFile : computeClaimsInBrowser(b, c);
+    const runTime = pack.run_time ? isoTime(Date.parse(pack.run_time) || pack.run_time) : "n/a";
+    const sourceNote = fromFile
+      ? ('Reading <span class="mono">data/claims_results.json</span>, last run ' + esc(runTime) + '. A daily GitHub Action re-pulls DefiLlama and writes this file.')
+      : ('No claims file was found' + (claimsFileError ? (' (' + esc(claimsFileError) + ')') : '') + '. Figures below were computed in the browser from the data now on this page, using the same tolerance rule. This is not the committed daily result.');
+    const counts = { green: 0, amber: 0, red: 0, unmeasured: 0, record: 0 };
+    (pack.claims || []).forEach(row => { counts[row.status] = (counts[row.status] || 0) + 1; });
     const root = el("view-claims");
     root.innerHTML =
-      '<p class="lead">Every claim below is taken from the thesis or the dashboard brief. Tolerances were not published in those documents, so they are not invented. Claims set from the 13 Nov pull read BASELINE. The first draft\'s record: 6 of 8 testable claims held; coverage and valuation missed. The ninth, measured issuance, is still untested.</p>' +
-      '<div class="card" style="overflow:auto"><table><thead><tr><th>Claim</th><th>Frozen value</th><th>Tolerance</th><th>Kill</th><th>Confirm</th><th>Current</th><th>Status</th><th>Note</th></tr></thead><tbody>' +
-      rows.map(r => {
-        const st = r[6];
-        return "<tr><td>" + esc(r[0]) + "</td><td>" + esc(r[1]) + "</td><td>" + esc(r[2]) + "</td><td>" + esc(r[3]) + "</td><td>" + esc(r[4]) + "</td><td>" + esc(r[5]) + "</td><td>" + tag(st.toLowerCase(), st) + "</td><td>" + esc(r[7]) + "</td></tr>";
+      '<p class="lead">Each frozen claim from the thesis or brief is graded against a fresh DefiLlama (or RPC) pull. The tolerance band is a dashboard rule, not a rule published in the thesis. Unmeasured rows, including BigQuery items skipped by request, are not graded. First-draft misses are tagged record, not retested live.</p>' +
+      '<p class="note">' + sourceNote + ' ' + esc(pack.tolerance_rule || CLAIMS_TOLERANCE) + '</p>' +
+      '<div class="today-row" style="margin:8px 0 12px"><span>' + tag("ok", counts.green + " green") + '</span><span>' + tag("watch", counts.amber + " amber") + '</span><span>' + tag("fired", counts.red + " red") + '</span><span>' + tag("sec", counts.unmeasured + " unmeasured") + '</span><span>' + tag("baseline", counts.record + " record") + '</span><span>last run: ' + esc(runTime) + '</span></div>' +
+      '<div class="card" style="overflow:auto"><table><thead><tr><th>Claim</th><th>Frozen value</th><th>Live value</th><th>Status</th><th>Relative difference</th><th>Source / note</th></tr></thead><tbody>' +
+      (pack.claims || []).map(row => {
+        const rd = row.relative_difference == null ? "n/a" : (row.relative_difference * 100).toFixed(2) + "%";
+        const note = [row.source, row.note].filter(Boolean).join(". ");
+        return "<tr><td>" + esc(row.claim) + "</td><td class='num'>" + esc(fmtClaimVal(row.frozen_value, row.unit)) + "</td><td class='num'>" + esc(fmtClaimVal(row.live_value, row.unit)) + "</td><td>" + statusBadge(row.status) + "</td><td class='num'>" + esc(rd) + "</td><td>" + esc(note) + "</td></tr>";
       }).join("") + "</tbody></table></div>";
   }
 
@@ -1243,30 +1623,122 @@
   function renderScenarios() {
     const root = el("view-scenarios");
     const iss = FROZEN_SUPPLY * CAP_HSP * FROZEN_PRICE;
+    const o = modelOut(model);
+    const passLine = o.pass.already
+      ? ("Already covers issuance at the current run rate (" + fmtPct(o.cov0, 0) + ").")
+      : (o.pass.never
+        ? o.pass.reason
+        : ("Buybacks would pass issuance in about " + o.pass.years.toFixed(1) + " years, around " + o.pass.calendarYear.toFixed(1) + ". " + o.pass.reason));
     const card = (key, title) => {
       const s = scen[key];
-      const o = scenOut(s);
+      const out = scenOut(s);
       return '<div class="card scen"><h3>' + title + "</h3>" +
         '<p class="sub">Editable monthly volume and take rate. Revenue is volume x take rate x 12. Coverage uses yearly issuance under HSP-029 at $3.51, which is ' + fmtB(iss) + " (about $74M).</p>" +
         '<label>Monthly volume, USD<input id="scen-' + key + '-vol" type="text" value="' + s.vol + '" /></label>' +
         '<label>Take rate, bp<input id="scen-' + key + '-take" type="text" value="' + s.take + '" /></label>' +
-        '<p style="margin:12px 0 0"><strong>' + fmtB(o.annual) + " a year</strong>, " + fmtPct(o.cov, 0) + " of issuance.</p></div>";
+        '<p style="margin:12px 0 0"><strong>' + fmtB(out.annual) + " a year</strong>, " + fmtPct(out.cov, 0) + " of issuance.</p></div>";
     };
     root.innerHTML =
-      '<p class="lead">These are run-rate scenarios to end-2028, not price targets. Defaults from the brief: bear $3.9B a month at 3 bp = $14M a year (19% of issuance); base $6B at 5 bp = $36M (49%); bull $10B at 7 bp = $84M (114%). Yearly issuance under HSP-029 at $3.51 is about $74M. Edit the inputs to test other combinations. Nothing here is a forecast we claim will happen.</p>' +
+      '<p class="lead">An interactive run-rate model, plus the three end-2028 cases from the brief. Nothing here is a forecast we claim will happen. Shareable settings live in the URL hash.</p>' +
+      '<div class="card" style="margin-bottom:16px" id="scenario-model"><h3>Interactive scenario</h3>' +
+        '<p class="sub">Coverage = (monthly volume x (1 + growth)^years x take rate x 12) / (1.312B x issuance cap x price). Price, take rate, supply and the cap are held fixed while volume grows. Default growth is 0 because the thesis does not publish a growth rate to use.</p>' +
+        '<div class="model-grid"><div class="sliders">' +
+          '<div><label for="mVol">Monthly volume: <strong id="mVolLbl">' + fmtB(model.vol) + '</strong></label><input id="mVol" type="range" min="1000000000" max="20000000000" step="100000000" value="' + model.vol + '" /></div>' +
+          '<div><label for="mTake">Take rate: <strong id="mTakeLbl">' + model.take.toFixed(2) + ' bp</strong></label><input id="mTake" type="range" min="1" max="15" step="0.01" value="' + model.take + '" /></div>' +
+          '<div><label for="mPrice">NEAR price: <strong id="mPriceLbl">' + fmtPx(model.price) + '</strong></label><input id="mPrice" type="range" min="1" max="15" step="0.01" value="' + model.price + '" /></div>' +
+          '<div><label for="mGrowth">Annual volume growth: <strong id="mGrowthLbl">' + (model.growth * 100).toFixed(0) + '%</strong></label><input id="mGrowth" type="range" min="0" max="0.5" step="0.01" value="' + model.growth + '" /></div>' +
+          '<div><label for="mCap">Issuance cap</label><select id="mCap"><option value="0.016"' + (model.cap === CAP_HSP ? " selected" : "") + '>1.6% (HSP-029 end state)</option><option value="0.025"' + (model.cap === CAP_NOW ? " selected" : "") + '>2.5% (current)</option></select></div>' +
+        '</div><div class="model-out card" style="margin:0">' +
+          '<p class="k">Coverage at the current run rate</p><p class="big">' + (o.cov0 == null ? "n/a" : fmtPct(o.cov0, 0)) + '</p>' +
+          '<p>Yearly revenue ' + fmtB(o.annualRev0) + ' vs yearly issuance ' + fmtB(o.annualIss) + '.</p>' +
+          '<p><strong>Year buybacks pass issuance:</strong> ' + esc(passLine) + '</p>' +
+          '<p><button type="button" class="refresh-btn copy-btn" id="copyShare">Copy share link</button> <span id="copyShareMsg" class="sub"></span></p>' +
+        '</div></div></div>' +
       '<div class="scen-grid">' + card("bear", "Bear") + card("base", "Base") + card("bull", "Bull") + "</div>" +
-      '<p class="note">Issuance in this view is held at the frozen $3.51 price and the 1.6% end-state cap. A higher price would raise dollar issuance one-for-one and lower these coverage figures.</p>';
+      '<p class="note">The three cards still use issuance at the frozen $3.51 and the 1.6% end-state cap, matching the brief. The interactive model above lets you change the price and the cap. Defaults from the brief: bear $3.9B a month at 3 bp = $14M a year (19% of issuance); base $6B at 5 bp = $36M (49%); bull $10B at 7 bp = $84M (114%).</p>';
+    const syncModel = (push) => {
+      model.vol = Number(el("mVol").value);
+      model.take = Number(el("mTake").value);
+      model.price = Number(el("mPrice").value);
+      model.growth = Number(el("mGrowth").value);
+      model.cap = Number(el("mCap").value);
+      el("mVolLbl").textContent = fmtB(model.vol);
+      el("mTakeLbl").textContent = model.take.toFixed(2) + " bp";
+      el("mPriceLbl").textContent = fmtPx(model.price);
+      el("mGrowthLbl").textContent = (model.growth * 100).toFixed(0) + "%";
+      const next = viewHash("scenarios");
+      if (location.hash !== next) history[push ? "pushState" : "replaceState"]({ view: "scenarios" }, "", next);
+      const out = modelOut(model);
+      const box = root.querySelector(".model-out");
+      if (box) {
+        const passLine2 = out.pass.already
+          ? ("Already covers issuance at the current run rate (" + fmtPct(out.cov0, 0) + ").")
+          : (out.pass.never
+            ? out.pass.reason
+            : ("Buybacks would pass issuance in about " + out.pass.years.toFixed(1) + " years, around " + out.pass.calendarYear.toFixed(1) + ". " + out.pass.reason));
+        box.querySelector(".big").textContent = out.cov0 == null ? "n/a" : fmtPct(out.cov0, 0);
+        box.querySelectorAll("p")[1].textContent = "Yearly revenue " + fmtB(out.annualRev0) + " vs yearly issuance " + fmtB(out.annualIss) + ".";
+        box.querySelectorAll("p")[2].innerHTML = "<strong>Year buybacks pass issuance:</strong> " + esc(passLine2);
+      }
+    };
+    ["mVol", "mTake", "mPrice", "mGrowth"].forEach(id => {
+      el(id).addEventListener("input", () => syncModel(false));
+      el(id).addEventListener("change", () => syncModel(true));
+    });
+    el("mCap").addEventListener("change", () => syncModel(true));
+    el("copyShare").addEventListener("click", async () => {
+      const url = location.origin + location.pathname + viewHash("scenarios");
+      try {
+        await navigator.clipboard.writeText(url);
+        el("copyShareMsg").textContent = "Copied.";
+      } catch (err) {
+        el("copyShareMsg").textContent = url;
+      }
+    });
     ["bear", "base", "bull"].forEach(key => {
       const upd = () => {
         const v = Number(el("scen-" + key + "-vol").value);
-        const t = Number(el("scen-" + key + "-take").value);
+        const tk = Number(el("scen-" + key + "-take").value);
         if (isFinite(v) && v > 0) scen[key].vol = v;
-        if (isFinite(t) && t > 0) scen[key].take = t;
+        if (isFinite(tk) && tk > 0) scen[key].take = tk;
         renderScenarios();
       };
       el("scen-" + key + "-vol").addEventListener("change", upd);
       el("scen-" + key + "-take").addEventListener("change", upd);
     });
+  }
+
+  function renderLeadLag() {
+    const b = current;
+    const res = leadLagResult(b);
+    const root = el("view-leadlag");
+    const table = (res.ok ? res.lags : []).map(row =>
+      "<tr><td>lag " + row.k + "</td><td class='num'>" + (row.r == null ? "n/a" : row.r.toFixed(3)) + "</td><td class='num'>" + row.n + "</td></tr>"
+    ).join("");
+    root.innerHTML =
+      '<p class="lead">A new check, not the thesis H1 test. H1 in the thesis asked whether Intents volume leads or lags NEAR chain activity; that test is not run here. This view asks whether monthly Intents volume is linearly related to the later monthly NEAR price.</p>' +
+      '<div class="card" style="margin-bottom:12px"><h3>Pearson correlation, volume leading price</h3>' +
+        '<p class="sub">Lag k is corr(volume in month t, average NEAR price in month t+k). Monthly price is the average of daily UTC-month prices from the DefiLlama coins chart (coingecko:near, period=1d). Monthly volume is the DefiLlama Intents series already used on this dashboard. The overlap starts at the first month present in both series.</p>' +
+        (res.ok
+          ? ('<p>' + esc(leadLagPlain(res)) + '</p><table><thead><tr><th>Lag</th><th>Pearson r</th><th>n months</th></tr></thead><tbody>' + table + '</tbody></table>' +
+             '<div class="chart-wrap short"><canvas id="cLeadLag"></canvas></div>' +
+             '<p class="note">Source: ' + esc(res.src) + (res.at ? (" · " + isoTime(res.at)) : "") + ". Complete overlapping months: " + esc(res.keys[0] + " to " + res.keys[res.keys.length - 1]) + " (n = " + res.nMonths + "). A month is kept only if it has at least 28 daily price points, so a partial current month is not treated as a full month" + (res.skipped && res.skipped.length ? (" (excluded: " + res.skipped.join(", ") + ")") : "") + ". A sample this small is a caveat, not a trend.</p>")
+          : ('<p class="note">' + esc(res.reason || "The test could not be run.") + (b.llamaPrices ? "" : " Waiting for the DefiLlama coins chart, or falling back if that call failed.") + '</p>')) +
+      '</div>';
+    if (res.ok) {
+      makeChart("cLeadLag", {
+        type: "bar",
+        data: {
+          labels: res.lags.map(r => "lag " + r.k),
+          datasets: [{ label: "Pearson r", data: res.lags.map(r => r.r), backgroundColor: accent() }]
+        },
+        options: {
+          maintainAspectRatio: false,
+          scales: { y: { suggestedMin: -1, suggestedMax: 1, title: { display: true, text: "Pearson r" } } },
+          plugins: { tooltip: { callbacks: { label: ctx => "r = " + (ctx.parsed.y == null ? "n/a" : ctx.parsed.y.toFixed(3)) + ", n = " + res.lags[ctx.dataIndex].n } } }
+        }
+      });
+    }
   }
 
   function renderSources() {
@@ -1279,9 +1751,9 @@
       '<p class="lead">Every number on this page comes from a live API call, from a formula in the brief applied to live data, or from the frozen snapshot of 13 Nov 2026. Failed calls fall back to that snapshot and are tagged. Nothing is invented, estimated or smoothed.</p>' +
       '<div class="card" style="margin-bottom:12px;overflow:auto"><h3>Data-status panel</h3><p class="sub">Each call, its result and its time. Cache lasts 10 minutes. Refresh clears the wait and fetches again. The Explorer call is never allowed to block the rest of the page.</p><table><thead><tr><th>Source</th><th>Endpoint</th><th>Result</th><th>Time</th><th>Tier</th><th>Error</th></tr></thead><tbody>' + rows + "</tbody></table></div>" +
       '<div class="card" style="margin-bottom:12px"><h3>What is not measured here</h3><ul>' +
-      "<li>BigQuery signers, HOT share and measured issuance: offline query, see repo. The queries are listed below.</li>" +
+      "<li>BigQuery signers, HOT share and measured issuance: skipped by request. They stay clearly marked unmeasured. The queries are still listed below if a reviewer wants to run them later.</li>" +
       "<li>Explorer route split and an independent 1Click / buyback series, unless you enter a partner JWT in this tab.</li>" +
-      "<li>Independent buyback series from the chain.</li>" +
+      "<li>A full on-chain buyback history with purchase prices. The issuance view now checks the wallet balance via NEAR RPC and, when the browser can reach it, a recent NearBlocks page. That is still not a cost reconciliation.</li>" +
       "<li>NEAR AI revenue. None has been published.</li>" +
       "</ul><p class='note'>A gap we cannot yet explain: a transcribed NearStats figure puts August 2026 volume at $3.20B, while DefiLlama says $2.78B. This dashboard uses DefiLlama throughout.</p></div>" +
       '<div class="card"><h3>BigQuery, offline</h3><p class="sub">Not callable from a browser. Requires a Google Cloud account. Shown here so a reviewer can run them later.</p>' +
@@ -1290,11 +1762,8 @@
       "</pre></div>";
   }
 
-  function renderAll() {
-    chartDefaults();
-    const v = document.querySelector(".view.active");
-    const id = v ? v.id.replace("view-", "") : "overview";
-    const map = {
+  function viewRenderers() {
+    return {
       overview: renderOverview,
       bullpath: renderBullPath,
       volume: renderVolume,
@@ -1306,23 +1775,60 @@
       claims: renderClaims,
       chain: renderChain,
       scenarios: renderScenarios,
-      sources: renderSources
+      sources: renderSources,
+      leadlag: renderLeadLag
     };
-    Object.keys(map).forEach(k => {
-      try { map[k](); } catch (err) { console.error("render", k, err); el("view-" + k).innerHTML = "<p>This view failed to render. " + esc(String(err)) + "</p>"; }
-    });
-    showView(id);
   }
 
-  function showView(id) {
+  function renderView(id) {
+    if (!VIEWS.some(v => v[0] === id)) id = "overview";
+    try {
+      chartDefaults();
+      Object.keys(charts).forEach(killChart);
+      const fn = viewRenderers()[id] || renderOverview;
+      fn();
+    } catch (err) {
+      console.error("render", id, err);
+      const node = el("view-" + id);
+      if (node) node.innerHTML = "<p>This view failed to render. " + esc(String(err)) + "</p>";
+    }
+  }
+
+  function renderAll() {
+    renderView(currentViewId() || parseHash().id);
+  }
+
+  function showView(id, opts) {
+    if (!VIEWS.some(v => v[0] === id)) id = "overview";
     VIEWS.forEach(([k, title]) => {
-      el("view-" + k).classList.toggle("active", k === id);
+      const node = el("view-" + k);
+      if (node) {
+        const on = k === id;
+        const was = node.classList.contains("active");
+        node.classList.toggle("active", on);
+        node.classList.toggle("enter", on && !was);
+      }
       const btn = document.querySelector('.nav-btn[data-view="' + k + '"]');
-      if (btn) btn.classList.toggle("active", k === id);
+      if (btn) {
+        btn.classList.toggle("active", k === id);
+        if (k === id) btn.setAttribute("aria-current", "page");
+        else btn.removeAttribute("aria-current");
+      }
       if (k === id) el("viewTitle").textContent = title;
     });
-    el("sidebar").classList.remove("open");
-    window.scrollTo(0, 0);
+    closeNav();
+    if (!(opts && opts.keepScroll)) window.scrollTo(0, 0);
+    if (!(opts && opts.fromHash)) {
+      const next = viewHash(id);
+      if (location.hash !== next) history.pushState({ view: id }, "", next);
+    }
+    if (!(opts && opts.skipRender)) renderView(id);
+  }
+
+  function applyHash() {
+    const parsed = parseHash();
+    applyModelParams(parsed.params);
+    showView(parsed.id, { fromHash: true });
   }
 
   function buildNav() {
@@ -1346,10 +1852,33 @@
   el("jwtClear").onclick = () => { jwt = null; el("jwtInput").value = ""; el("settingsModal").classList.remove("show"); recordStatus("Explorer 1Click", ENDPOINTS.explorer, false, "no JWT; showing snapshot", Date.now(), true, "Key cleared."); renderSources(); };
   el("jwtSave").onclick = () => { jwt = el("jwtInput").value.trim() || null; el("settingsModal").classList.remove("show"); if (jwt) fetchExplorer().then(() => renderSources()); };
   el("settingsModal").addEventListener("click", e => { if (e.target === el("settingsModal")) el("settingsModal").classList.remove("show"); });
-  el("ham").onclick = () => el("sidebar").classList.toggle("open");
+  el("ham").onclick = () => {
+    const side = el("sidebar");
+    if (side && side.classList.contains("open")) closeNav(); else openNav();
+  };
+  if (el("navBackdrop")) el("navBackdrop").onclick = closeNav;
+
+  window.addEventListener("hashchange", () => applyHash());
+  window.addEventListener("popstate", () => applyHash());
+  document.addEventListener("keydown", e => {
+    const tagName = (e.target && e.target.tagName) || "";
+    if (tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT") return;
+    const idx = VIEWS.findIndex(v => v[0] === currentViewId());
+    if (idx < 0) return;
+    if (e.key === "ArrowDown" || e.key === "ArrowRight") {
+      e.preventDefault();
+      showView(VIEWS[Math.min(VIEWS.length - 1, idx + 1)][0]);
+    } else if (e.key === "ArrowUp" || e.key === "ArrowLeft") {
+      e.preventDefault();
+      showView(VIEWS[Math.max(0, idx - 1)][0]);
+    }
+  });
 
   buildNav();
-  renderAll();
+  const parsed = parseHash();
+  applyModelParams(parsed.params);
+  showView(parsed.id, { fromHash: true });
+  if (!location.hash) history.replaceState({ view: "overview" }, "", "#overview");
   loadAll(false);
   setInterval(() => loadAll(false), CACHE_MS);
 })();
