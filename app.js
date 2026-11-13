@@ -1649,9 +1649,9 @@
           '<div><label for="mGrowth">Annual volume growth: <strong id="mGrowthLbl">' + (model.growth * 100).toFixed(0) + '%</strong></label><input id="mGrowth" type="range" min="0" max="0.5" step="0.01" value="' + model.growth + '" /></div>' +
           '<div><label for="mCap">Issuance cap</label><select id="mCap"><option value="0.016"' + (model.cap === CAP_HSP ? " selected" : "") + '>1.6% (HSP-029 end state)</option><option value="0.025"' + (model.cap === CAP_NOW ? " selected" : "") + '>2.5% (current)</option></select></div>' +
         '</div><div class="model-out card" style="margin:0">' +
-          '<p class="k">Coverage at the current run rate</p><p class="big">' + (o.cov0 == null ? "n/a" : fmtPct(o.cov0, 0)) + '</p>' +
-          '<p>Yearly revenue ' + fmtB(o.annualRev0) + ' vs yearly issuance ' + fmtB(o.annualIss) + '.</p>' +
-          '<p><strong>Year buybacks pass issuance:</strong> ' + esc(passLine) + '</p>' +
+          '<p class="k">Coverage at the current run rate</p><p class="big" id="modelCovPct">' + (o.cov0 == null ? "n/a" : fmtPct(o.cov0, 0)) + '</p>' +
+          '<p id="modelRevLine">Yearly revenue ' + fmtB(o.annualRev0) + ' vs yearly issuance ' + fmtB(o.annualIss) + '.</p>' +
+          '<p id="modelPassLine"><strong>Year buybacks pass issuance:</strong> ' + esc(passLine) + '</p>' +
           '<p><button type="button" class="refresh-btn copy-btn" id="copyShare">Copy share link</button> <span id="copyShareMsg" class="sub"></span></p>' +
         '</div></div></div>' +
       '<div class="scen-grid">' + card("bear", "Bear") + card("base", "Base") + card("bull", "Bull") + "</div>" +
@@ -1676,9 +1676,9 @@
           : (out.pass.never
             ? out.pass.reason
             : ("Buybacks would pass issuance in about " + out.pass.years.toFixed(1) + " years, around " + out.pass.calendarYear.toFixed(1) + ". " + out.pass.reason));
-        box.querySelector(".big").textContent = out.cov0 == null ? "n/a" : fmtPct(out.cov0, 0);
-        box.querySelectorAll("p")[1].textContent = "Yearly revenue " + fmtB(out.annualRev0) + " vs yearly issuance " + fmtB(out.annualIss) + ".";
-        box.querySelectorAll("p")[2].innerHTML = "<strong>Year buybacks pass issuance:</strong> " + esc(passLine2);
+        el("modelCovPct").textContent = out.cov0 == null ? "n/a" : fmtPct(out.cov0, 0);
+        el("modelRevLine").textContent = "Yearly revenue " + fmtB(out.annualRev0) + " vs yearly issuance " + fmtB(out.annualIss) + ".";
+        el("modelPassLine").innerHTML = "<strong>Year buybacks pass issuance:</strong> " + esc(passLine2);
       }
     };
     ["mVol", "mTake", "mPrice", "mGrowth"].forEach(id => {
