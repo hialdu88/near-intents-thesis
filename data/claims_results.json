@@ -1,0 +1,245 @@
+{
+  "run_time": "2026-11-13T20:08:10Z",
+  "tolerance_rule": "Dashboard rule, not a tolerance published in the thesis or brief. Green if the absolute relative difference |live-frozen|/|frozen| is at most 5%. Amber if it is more than 5% and at most 15%. Red if it is more than 15%. Unmeasured claims are not graded. Holders revenue is summed through 3 Nov 2026. 30-day coverage is retested at $3.51 and 1.312B supply.",
+  "frozen_as_of": "13 Nov 2026",
+  "errors": {},
+  "claims": [
+    {
+      "id": "vol_30d",
+      "claim": "Intents volume, 30 days",
+      "frozen_value": 3774000000.0,
+      "live_value": 3774153452,
+      "unit": "USD",
+      "status": "green",
+      "relative_difference": 4.066030736618972e-05,
+      "source": "DefiLlama volume total30d",
+      "note": ""
+    },
+    {
+      "id": "vol_all",
+      "claim": "Intents volume, all-time",
+      "frozen_value": 37610000000.0,
+      "live_value": 37614087536,
+      "unit": "USD",
+      "status": "green",
+      "relative_difference": 0.00010868215900026589,
+      "source": "DefiLlama volume totalAllTime",
+      "note": ""
+    },
+    {
+      "id": "fees_30d",
+      "claim": "Gross fees, 30 days",
+      "frozen_value": 6050000.0,
+      "live_value": 6048207,
+      "unit": "USD",
+      "status": "green",
+      "relative_difference": 0.0002963636363636364,
+      "source": "DefiLlama fees total30d",
+      "note": ""
+    },
+    {
+      "id": "fees_all",
+      "claim": "Gross fees, all-time",
+      "frozen_value": 60750000.0,
+      "live_value": 60745314.980000004,
+      "unit": "USD",
+      "status": "green",
+      "relative_difference": 7.711967078182432e-05,
+      "source": "DefiLlama fees totalAllTime",
+      "note": ""
+    },
+    {
+      "id": "rev_30d",
+      "claim": "Protocol revenue, 30 days",
+      "frozen_value": 1840000.0,
+      "live_value": 1842648,
+      "unit": "USD",
+      "status": "green",
+      "relative_difference": 0.0014391304347826086,
+      "source": "DefiLlama revenue total30d",
+      "note": ""
+    },
+    {
+      "id": "rev_all",
+      "claim": "Protocol revenue, all-time",
+      "frozen_value": 9930000.0,
+      "live_value": 9925874.05,
+      "unit": "USD",
+      "status": "green",
+      "relative_difference": 0.0004155035246726339,
+      "source": "DefiLlama revenue totalAllTime",
+      "note": ""
+    },
+    {
+      "id": "holders_to_3nov",
+      "claim": "Holders revenue (buybacks), cumulative to 3 Nov 2026",
+      "frozen_value": 7580000.0,
+      "live_value": 7620622.05,
+      "unit": "USD",
+      "status": "green",
+      "relative_difference": 0.005359109498680714,
+      "source": "DefiLlama holders revenue daily series, summed through 2026-11-03",
+      "note": "Frozen figure is cumulative to 3 Nov, not all-time. Live is the same cutoff."
+    },
+    {
+      "id": "take_30d",
+      "claim": "Take rate, 30 days",
+      "frozen_value": 4.875463698993111,
+      "live_value": 4.882281612115013,
+      "unit": "bp",
+      "status": "green",
+      "relative_difference": 0.001398413267503057,
+      "source": "revenue / volume x 10,000",
+      "note": "Frozen value is $1.84M / $3.774B, in basis points."
+    },
+    {
+      "id": "capture_30d",
+      "claim": "Capture, 30 days",
+      "frozen_value": 0.30413223140495865,
+      "live_value": 0.30466020756234036,
+      "unit": "ratio",
+      "status": "green",
+      "relative_difference": 0.0017360085609561475,
+      "source": "revenue / gross fees",
+      "note": "Frozen value is $1.84M / $6.05M, not the published 30.5% rounding."
+    },
+    {
+      "id": "coverage_30d_at_351",
+      "claim": "Coverage of issuance, 30 days, at frozen $3.51",
+      "frozen_value": 0.1944502351006416,
+      "live_value": 0.19473007435202558,
+      "unit": "ratio",
+      "status": "green",
+      "relative_difference": 0.0014391304347826411,
+      "source": "30-day revenue / (1.312B x 2.5% x $3.51 x 30/365)",
+      "note": "Retested at $3.51 so a live price move does not decide it."
+    },
+    {
+      "id": "vol_2026_09",
+      "claim": "September 2026 Intents volume (record month)",
+      "frozen_value": 4800000000.0,
+      "live_value": 4803094377.0,
+      "unit": "USD",
+      "status": "green",
+      "relative_difference": 0.000644661875,
+      "source": "DefiLlama daily volume, summed for 2026-09",
+      "note": ""
+    },
+    {
+      "id": "q3_vol",
+      "claim": "Q3 2026 Intents volume",
+      "frozen_value": 9790000000.0,
+      "live_value": 9786001341.0,
+      "unit": "USD",
+      "status": "green",
+      "relative_difference": 0.00040844320735444333,
+      "source": "DefiLlama daily volume, summed Jul-Sep 2026",
+      "note": ""
+    },
+    {
+      "id": "q3_capture",
+      "claim": "Q3 2026 capture",
+      "frozen_value": 0.212,
+      "live_value": 0.21251867031343957,
+      "unit": "ratio",
+      "status": "green",
+      "relative_difference": 0.002446558082262164,
+      "source": "Q3 revenue / Q3 fees",
+      "note": ""
+    },
+    {
+      "id": "q3_take",
+      "claim": "Q3 2026 take rate",
+      "frozen_value": 3.14,
+      "live_value": 3.1347216223521666,
+      "unit": "bp",
+      "status": "green",
+      "relative_difference": 0.0016810119897559125,
+      "source": "Q3 revenue / Q3 volume, in basis points",
+      "note": ""
+    },
+    {
+      "id": "q3_coverage",
+      "claim": "Q3 2026 coverage at $3.51",
+      "frozen_value": 0.107,
+      "live_value": 0.10658185671600305,
+      "unit": "ratio",
+      "status": "green",
+      "relative_difference": 0.00390788115884997,
+      "source": "Q3 revenue / quarterly issuance at 2.5% and $3.51",
+      "note": ""
+    },
+    {
+      "id": "buyback_wallet",
+      "claim": "Buyback wallet balance",
+      "frozen_value": 1770000.0,
+      "live_value": 2279017.142302966,
+      "unit": "NEAR",
+      "status": "red",
+      "relative_difference": 0.28758030638585663,
+      "source": "NEAR RPC view_account buybacks.multisignature.near",
+      "note": "Frozen 1.77M NEAR is from revenue.near.org, which marks its figures illustrative. Live is the on-chain amount field."
+    },
+    {
+      "id": "ex_hot_signers",
+      "claim": "Ex-HOT daily signers",
+      "frozen_value": null,
+      "live_value": null,
+      "unit": null,
+      "status": "unmeasured",
+      "relative_difference": null,
+      "source": "BigQuery, skipped",
+      "note": "Scala skipped BigQuery. This claim stays unmeasured."
+    },
+    {
+      "id": "hot_share",
+      "claim": "HOT Wallet share of transactions",
+      "frozen_value": 0.65,
+      "live_value": null,
+      "unit": "ratio",
+      "status": "unmeasured",
+      "relative_difference": null,
+      "source": "Nansen Q2 2026, secondary; refresh would need BigQuery",
+      "note": "Scala skipped BigQuery. Frozen 65% in Q2 2026 is secondary and is not retested."
+    },
+    {
+      "id": "measured_issuance",
+      "claim": "Measured issuance from chain data",
+      "frozen_value": null,
+      "live_value": null,
+      "unit": null,
+      "status": "unmeasured",
+      "relative_difference": null,
+      "source": "BigQuery, skipped",
+      "note": "Scala skipped BigQuery. This claim stays unmeasured."
+    },
+    {
+      "id": "first_draft_coverage",
+      "claim": "First draft coverage (historical record)",
+      "frozen_value": 0.25,
+      "live_value": 0.19,
+      "unit": "ratio",
+      "status": "record",
+      "relative_difference": 0.24,
+      "source": "Thesis, section 10",
+      "note": "The draft said 25% and the primary pull said 19%. This is a historical miss, not a live retest."
+    },
+    {
+      "id": "first_draft_valuation",
+      "claim": "First draft valuation, best 30 days (historical record)",
+      "frozen_value": 161,
+      "live_value": 205,
+      "unit": "multiple",
+      "status": "record",
+      "relative_difference": 0.2732919254658385,
+      "source": "Thesis, section 10",
+      "note": "The draft said 161x and the primary pull said 205x, 28% off. Historical miss, not a live retest."
+    }
+  ],
+  "onchain_buyback": {
+    "account": "buybacks.multisignature.near",
+    "rpc_amount_near": 2279017.142302966,
+    "rpc_error": null,
+    "note": "On-chain amount from view_account. This is not a cost basis for holders revenue."
+  }
+}
