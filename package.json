@@ -1,0 +1,9 @@
+{
+  "name": "near-intents-thesis",
+  "private": true,
+  "version": "1.0.0",
+  "license": "MIT",
+  "scripts": {
+    "start": "npx serve ."
+  }
+}

@@ -217,6 +217,26 @@
     .status-ok { color: var(--green); }
     .status-fail { color: var(--red); }
     .src-time { font-family: var(--mono); font-size: 11px; }
+
+    .q4-hero { display: grid; grid-template-columns: 1.4fr 0.9fr; gap: 12px; margin-bottom: 16px; }
+    .q4-hero .hero-main { padding: 16px 18px; }
+    .q4-hero h3 { margin: 0 0 6px; font-size: 15px; }
+    .q4-stat { font-size: 32px; font-weight: 650; letter-spacing: -0.03em; margin: 4px 0 8px; }
+    .badge { display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: .02em; padding: 3px 8px; border-radius: 999px; text-transform: uppercase; }
+    .badge.ok { background: var(--green-soft); color: var(--green); }
+    .badge.no { background: var(--red-soft); color: var(--red); }
+    .badge.wait { background: var(--amber-soft); color: var(--amber); }
+    .countdown { font-family: var(--mono); font-size: 18px; font-weight: 500; margin: 8px 0 0; }
+    .trend-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+    .moat ul, .catalysts ul { margin: 0; padding-left: 18px; }
+    .moat li, .catalysts li { margin: 6px 0; }
+    .cat-row { display: grid; grid-template-columns: 1.4fr 0.5fr 1.1fr; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); align-items: start; }
+    .cat-row:last-child { border-bottom: 0; }
+    .bar-row { margin: 12px 0 16px; }
+    .bar-row .bar-head { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; margin-bottom: 6px; }
+    @media (max-width: 980px) {
+      .q4-hero, .trend-grid, .cat-row { grid-template-columns: 1fr; }
+    }
     .ham { display: none; }
     @media (max-width: 980px) {
       .kpis, .grid-2, .grid-3, .sliders, .scen-grid { grid-template-columns: 1fr; }
@@ -253,6 +273,7 @@
       </div>
       <div class="content">
         <section class="view active" id="view-overview"></section>
+        <section class="view" id="view-bullpath"></section>
         <section class="view" id="view-volume"></section>
         <section class="view" id="view-capture"></section>
         <section class="view" id="view-issuance"></section>
@@ -285,7 +306,6 @@
     </div>
   </div>
   <script>
-
 (function () {
   const SNAPSHOT_DATE = "13 Nov 2026";
   const FROZEN_PRICE = 3.51;
@@ -364,6 +384,7 @@
 
   const VIEWS = [
     ["overview", "Overview"],
+    ["bullpath", "Bull path"],
     ["volume", "Intents volume"],
     ["capture", "Value capture"],
     ["issuance", "Issuance vs buybacks"],
@@ -385,7 +406,6 @@
     chains: "https://api.llama.fi/v2/chains",
     cgPrice: "https://api.coingecko.com/api/v3/simple/price?ids=near,solana,hyperliquid,tron,ethereum&vs_currencies=usd&include_market_cap=true",
     cgCoin: "https://api.coingecko.com/api/v3/coins/near?localization=false&tickers=false&community_data=false&developer_data=false&sparkline=false",
-    cgChart: "https://api.coingecko.com/api/v3/coins/near/market_chart?vs_currency=usd&days=365",
     explorer: "https://explorer.near-intents.org/api/v0/transactions",
     revenuePage: "https://revenue.near.org",
     rpc: "https://rpc.mainnet.near.org"
@@ -739,7 +759,6 @@
       chains: fetchJSON("chains", ENDPOINTS.chains, Object.assign({ summarize: d => Array.isArray(d) ? d.length + " chains" : "ok" }, opt)),
       cgPrice: fetchJSON("cgPrice", ENDPOINTS.cgPrice, Object.assign({ summarize: d => d.near ? "NEAR " + fmtPx(d.near.usd) : "ok" }, opt)),
       cgCoin: fetchJSON("cgCoin", ENDPOINTS.cgCoin, Object.assign({ summarize: d => d.market_data ? "supply " + fmtN(d.market_data.circulating_supply) : "ok" }, opt)),
-      cgChart: fetchJSON("cgChart", ENDPOINTS.cgChart, Object.assign({ summarize: d => d.prices ? d.prices.length + " points" : "ok" }, opt)),
       block: fetchRPC("block", "block", { finality: "final" }),
       proto: fetchRPC("proto", "EXPERIMENTAL_protocol_config", { finality: "final" })
     };
@@ -815,40 +834,273 @@
   }
 
 
+
+  const Q4_END_UTC = Date.UTC(2026, 11, 31, 23, 59, 0);
+  const Q4_START_UTC = Date.UTC(2026, 9, 1, 0, 0, 0);
+  const Q4_TOTAL_DAYS = 92;
+  const BULL_TAKE_BP = 7;
+  const BULL_MONTHLY_VOL = 10e9;
+  let countdownTimer = null;
+
+  function lastRevenueDay(b) {
+    if (b.dailyRev && b.dailyRev.length) {
+      const rows = b.dailyRev.filter(p => p.v != null && p.day >= "2026-10-01");
+      if (rows.length) return rows[rows.length - 1].day;
+    }
+    const months = (b.months || []).filter(r => r.m >= "2026-10" && r.rev != null);
+    if (!months.length) return null;
+    const last = months[months.length - 1];
+    if (last.partial && last.partialTo) {
+      try {
+        const d = new Date(last.partialTo);
+        if (!isNaN(d)) return d.toISOString().slice(0, 10);
+      } catch (e) {}
+    }
+    const [y, m] = last.m.split("-").map(Number);
+    const lastDate = new Date(Date.UTC(y, m, 0));
+    return lastDate.toISOString().slice(0, 10);
+  }
+
+  function daysInclusive(isoDay) {
+    if (!isoDay) return null;
+    const t = Date.parse(isoDay + "T00:00:00Z");
+    if (!isFinite(t)) return null;
+    return Math.floor((t - Q4_START_UTC) / 86400000) + 1;
+  }
+
+  function q4Pace(b, c) {
+    const lastDay = lastRevenueDay(b);
+    const days = daysInclusive(lastDay);
+    const needed = Q4_NEEDED;
+    const proration = days ? needed * (days / Q4_TOTAL_DAYS) : null;
+    const onTrack = proration != null && c.q4rev != null && c.q4rev >= proration;
+    const months = (b.months || []).filter(r => r.m >= "2026-10" && r.rev != null).map(r => r.m);
+    return { lastDay, days, needed, proration, onTrack, months, known: lastDay != null && c.q4rev != null };
+  }
+
+  function formatCountdown(now) {
+    const ms = Q4_END_UTC - now;
+    if (ms <= 0) return "Q4 2026 has ended (31 Dec 2026, 11:59 PM UTC).";
+    const sec = Math.floor(ms / 1000);
+    const d = Math.floor(sec / 86400);
+    const h = Math.floor((sec % 86400) / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    return d + "d " + h + "h " + m + "m left";
+  }
+
+  function startCountdown() {
+    const tick = () => {
+      document.querySelectorAll(".q4clock").forEach(node => { node.textContent = formatCountdown(Date.now()); });
+    };
+    tick();
+    if (countdownTimer) clearInterval(countdownTimer);
+    countdownTimer = setInterval(tick, 30000);
+  }
+
+  function completeQuarters(b) {
+    const defs = [
+      { q: "Q1 2026", ms: ["2026-01", "2026-02", "2026-03"] },
+      { q: "Q2 2026", ms: ["2026-04", "2026-05", "2026-06"] },
+      { q: "Q3 2026", ms: ["2026-07", "2026-08", "2026-09"] }
+    ];
+    const by = {};
+    (b.months || []).forEach(r => { by[r.m] = r; });
+    return defs.map(d => {
+      const rows = d.ms.map(m => by[m]).filter(Boolean);
+      const vol = rows.reduce((s, r) => s + (r.vol || 0), 0);
+      const fees = rows.every(r => r.fees != null) ? rows.reduce((s, r) => s + r.fees, 0) : null;
+      const rev = rows.every(r => r.rev != null) ? rows.reduce((s, r) => s + r.rev, 0) : null;
+      return {
+        q: d.q,
+        vol, fees, rev,
+        capture: (rev != null && fees) ? rev / fees : null,
+        take: (rev != null && vol) ? takeBp(rev, vol) : null,
+        cov: (rev != null) ? coverage(rev, Q4_ISSUANCE) : null,
+        complete: rows.length === 3 && rev != null
+      };
+    });
+  }
+
+  function q4HeadlineHTML(b, c) {
+    const pace = q4Pace(b, c);
+    const monthsText = pace.months.length
+      ? ("Months counted: " + pace.months.join(", ") + (pace.lastDay ? ", through " + pace.lastDay : "") + ".")
+      : "No Q4 revenue days are in the current series.";
+    const method = "On track if Q4 protocol revenue to date is at or above a pro-rata share of the $4.32M needed for 15% coverage. The share is calendar days from 1 Oct 2026 to the last day with protocol revenue, divided by 92 days in Q4. Issuance is held at a frozen $3.51 and 1.312B supply. A later volume-only day is not used.";
+    const badge = !pace.known
+      ? '<span class="badge wait">Insufficient Q4 revenue days</span>'
+      : (pace.onTrack ? '<span class="badge ok">On track</span>' : '<span class="badge no">Not on track</span>');
+    const proLine = pace.proration != null
+      ? ("Pro-rata needed by " + pace.lastDay + " (day " + pace.days + " of 92): " + fmtB(pace.proration) + ". Revenue so far: " + fmtB(c.q4rev) + ".")
+      : "";
+    return '<div class="q4-hero">' +
+      '<div class="card hero-main"' + tip(method) + '>' +
+        '<h3>Q4 2026 coverage test, at a frozen $3.51</h3>' +
+        '<div class="q4-stat">' + fmtPct(c.q4cov) + " of issuance so far</div>" +
+        '<div class="progress' + ((c.q4cov != null && c.q4cov < 0.15) ? " risk" : "") + '"><span style="width:' + Math.min(100, (c.q4progress || 0) * 100).toFixed(1) + '%"></span></div>' +
+        '<p class="progress-label">' + fmtB(c.q4rev) + " of " + fmtB(Q4_NEEDED) + " needed to reach 15% coverage (" + ((c.q4progress || 0) * 100).toFixed(1) + "% of the way). " +
+        esc(monthsText) + " " + esc(proLine) + " " + badge + "</p>" +
+        '<p class="note">' + esc(method) + "</p>" +
+      "</div>" +
+      '<div class="card"><h3>Time left in Q4</h3>' +
+        '<p class="sub">Deadline: 31 Dec 2026, 11:59 PM UTC, which is 1 Jan 2027, 5:29 AM IST.</p>' +
+        '<div class="countdown q4clock">' + esc(formatCountdown(Date.now())) + "</div>" +
+        '<p class="note">If Q4 coverage finishes below 15% at $3.51, the token case is dead under the frozen rules. Coverage gets no reset.</p>' +
+      "</div></div>";
+  }
+
+  function catalysts(b, c) {
+    const qs = completeQuarters(b);
+    const maxVol = Math.max.apply(null, qs.map(q => q.vol || 0));
+    const maxCap = Math.max.apply(null, qs.filter(q => q.capture != null).map(q => q.capture));
+    const maxTakeQ = Math.max.apply(null, qs.filter(q => q.take != null).map(q => q.take));
+    const months = (b.months || []).filter(r => r.take != null && !r.partial);
+    const maxTakeM = months.length ? Math.max.apply(null, months.map(r => r.take)) : null;
+    const maxCovQ = Math.max.apply(null, qs.filter(q => q.cov != null).map(q => q.cov));
+    const volMet = qs.some(q => q.complete && q.vol >= 20e9);
+    const capMet = qs.some(q => q.complete && q.capture != null && q.capture >= 0.40);
+    const takeMet = (maxTakeM != null && maxTakeM >= 7) || qs.some(q => q.complete && q.take >= 7);
+    const covMet = qs.some(q => q.complete && q.cov >= 0.50) || (c.cov != null && c.cov >= 0.50);
+    return [
+      ["HSP-029 adoption (cuts issuance by a third)", "pending, manual", "Approved 2 Nov 2026 (The Block, snapshot). The thesis notes a veto window, and that validators still have to adopt a cut that lowers their own income by about 36% (section 6). This dashboard does not scrape later votes."],
+      ["Q4 2026 coverage result, 15% at $3.51", "in progress", "Single test at quarter end. So far " + fmtPct(c.q4cov) + " (" + fmtB(c.q4rev) + " of " + fmtB(Q4_NEEDED) + ")."],
+      ["A quarter above $20B of Intents volume", volMet ? "met" : "not met", "Highest complete quarter in the series is " + fmtB(maxVol) + ". Confirm signal from the thesis, section 10."],
+      ["Capture above 40% for a full quarter", capMet ? "met" : "not met", "Highest complete quarter is " + fmtPct(maxCap) + ". Q4 is not a complete quarter."],
+      ["Take rate above 7 bp", takeMet ? "met" : "not met", "Highest complete month is " + (maxTakeM == null ? "n/a" : fmtBp(maxTakeM)) + "; highest complete quarter is " + fmtBp(maxTakeQ) + ". The 30-day take rate is " + fmtBp(c.take) + "."],
+      ["Revenue above 50% of issuance", covMet ? "met" : "not met", "Highest complete quarter at $3.51 is " + fmtPct(maxCovQ) + ". The 30-day window is " + fmtPct(c.cov) + " at the live or snapshot price used on the Overview tile."],
+      ["Published NEAR AI revenue", "pending, manual", "The thesis (section 5) says no revenue, token volume or customer count is public. We do not invent a figure."]
+    ];
+  }
+
   function renderOverview() {
     const b = current, c = computed(b);
     const root = el("view-overview");
-    const q4line = "Fresh call from Q4 2026. Q4 coverage test: " +
-      (c.q4revKnown ? (c.q4progress * 100).toFixed(1) + "% of the way to 15%" : "November revenue is not in the snapshot, so Q4 to date uses October only") +
-      " (" + fmtB(c.q4rev) + " of " + fmtB(Q4_NEEDED) + " needed, at a frozen $3.51 price).";
+    const qs = completeQuarters(b);
     root.innerHTML =
-      '<p class="lead">NEAR is now a bet on one product, NEAR Intents, a cross-chain swap and settlement network that runs on NEAR. Since 23 Feb 2026 a fee switch sends protocol revenue into buying NEAR on the open market. The question is whether that revenue can grow to match or exceed new token issuance. Today it covers about 19% on the best recent 30 days and 5-11% on full quarters. Our view is constructive, conditional, and not cheap. All four of our quantitative kill rules fired in the first half of 2026. We restated the thesis as a fresh call from Q4 2026, with rules frozen on 14 Nov 2026. Coverage of issuance gets no reset: if Q4 2026 coverage is below 15% at a frozen $3.51 price, the token case is dead.</p>' +
+      '<p class="lead">NEAR Intents is a growing settlement product whose fees now buy back about 19% of new issuance on the best recent 30 days, up from 5-11% on full quarters in 2026. The token case is still unproven: all four kill rules fired in the first half of 2026, and Q4 must clear 15% coverage at a frozen $3.51 price.</p>' +
+      q4HeadlineHTML(b, c) +
+      '<div class="trend-grid">' +
+        '<div class="card chart-card"><h3>Take rate by month, since the fee switch</h3>' +
+        '<p class="sub">Protocol revenue / volume, in basis points. February 2026 was 2.79 bp in the snapshot table; October was 5.49 bp. A partial month is hatched. Two months are not a trend.</p>' +
+        '<div class="chart-wrap short"><canvas id="cOvTake"></canvas></div></div>' +
+        '<div class="card chart-card"><h3>Capture by quarter</h3>' +
+        '<p class="sub">Protocol revenue / gross fees. Q1 2026 was 13.1% and Q3 was 21.2% in the snapshot quarterly table, recomputed here from the monthly series when live data is present.</p>' +
+        '<div class="chart-wrap short"><canvas id="cOvCap"></canvas></div></div>' +
+        '<div class="card chart-card"><h3>Coverage of issuance</h3>' +
+        '<p class="sub">Complete quarters at a frozen $3.51 (Q1-Q3: 5.5%, 5.2%, 10.7% in the snapshot table). The last bar is the best recent 30 days at $3.51, so it is comparable to the thesis figure of about 19%. Full quarters were 5-11%.</p>' +
+        '<div class="chart-wrap short"><canvas id="cOvCov"></canvas></div></div>' +
+      "</div>" +
       '<div class="kpis">' +
         kpiHTML("Intents 30-day volume", fmtB(b.vol30d.v), b.vol30d, "", SNAP.vol30d) +
         kpiHTML("30-day protocol revenue", fmtB(b.rev30d.v), b.rev30d, "", SNAP.rev30d) +
         kpiHTML("Take rate, 30 days", fmtBp(c.take), { v: c.take, live: b.rev30d.live && b.vol30d.live, src: "protocol revenue / volume, in basis points", at: b.rev30d.at }, "", c.takeSnap) +
         kpiHTML("Capture, 30 days", fmtPct(c.cap), { v: c.cap, live: b.rev30d.live && b.fees30d.live, src: "protocol revenue / gross fees", at: b.rev30d.at }, "", c.capSnap) +
-        kpiHTML("Coverage of issuance, 30 days", fmtPct(c.cov), { v: c.cov, live: b.rev30d.live && b.price.live, src: "30-day revenue / (supply x 2.5% x price x 30/365). Live price used here. The Q4 test below uses $3.51.", at: b.rev30d.at }, "", c.covSnap) +
+        kpiHTML("Coverage of issuance, 30 days", fmtPct(c.cov), { v: c.cov, live: b.rev30d.live && b.price.live, src: "30-day revenue / (supply x 2.5% x price x 30/365). Live price used here. The Q4 test and the coverage chart use $3.51.", at: b.rev30d.at }, "", c.covSnap) +
         kpiHTML("NEAR price and market cap", fmtPx(b.price.v) + " · " + fmtB(b.marketCap.v, 2), b.price, '<span' + tip(b.marketCap.src) + ">" + srcTag(b.marketCap) + "</span>", SNAP.price) +
       "</div>" +
-      '<div class="thesis-status"' + tip("Q4 issuance at 2.5% and $3.51 is " + fmtB(Q4_ISSUANCE) + ". 15% of that is " + fmtB(Q4_NEEDED) + ".") + "><strong>Thesis status.</strong> " + esc(q4line) + "</div>" +
       '<div class="fired-box"><h3>Four quantitative kill rules fired in the first half of 2026</h3><ul>' +
         "<li>Intents volume below $8B a quarter: $7.18B in Q1 and $6.25B in Q2. Q3 recovered to $9.79B. FIRED on Q1-Q2.</li>" +
         "<li>Capture below 20%: 13.1% in Q1 and 16.1% in Q2. Q3 reached 21.2%. FIRED on Q1-Q2.</li>" +
         "<li>Take rate below 3 bp: 2.21 bp in Q1 and 2.40 bp in Q2. Q3 reached 3.14 bp. FIRED on Q1-Q2.</li>" +
         "<li>Revenue / issuance below 15%: 5.5% in Q1, 5.2% in Q2, 10.7% in Q3. FIRED, and still below. This rule gets no reset. Q4 is the last test, at a frozen $3.51 price.</li>" +
       '</ul><p class="note">History figures are from the 13 Nov 2026 snapshot quarterly table. Volume, capture and take rate restart their count from Q4 2026 because all three recovered in Q3.</p></div>' +
-      '<div class="grid-2">' +
-        '<div class="card"><h3>What this dashboard must make obvious</h3><p class="sub">Three questions, then the kill rules.</p><ol>' +
-        "<li>Is Intents volume growing, and in steps or smoothly?</li>" +
-        "<li>How much of each fee dollar does the protocol keep, and is that share rising?</li>" +
-        "<li>How far is protocol revenue from covering issuance, and what volume and take rate close the gap?</li>" +
-        "</ol><p class=\"note\">Don't call two good months a trend. Don't call the take-rate rise explained. Its likely cause (more flow through near.com and keyed 1Click partners) is unconfirmed.</p></div>" +
-        '<div class="card"><h3>Frozen baseline, 13 Nov 2026</h3><p class="sub">Used for the change figures on each tile and for the Q4 coverage test price.</p>' +
-        "<p>NEAR $" + FROZEN_PRICE.toFixed(2) + " · supply " + fmtN(FROZEN_SUPPLY) + " · cap $4.61B.</p>" +
-        "<p>30-day volume $3.774B, revenue $1.84M, take rate 4.88 bp, capture 30.5% on the published rounding, 30.41% from $1.84M / $6.05M.</p>" +
-        "<p>Issuance at 2.5% and $3.51: $9.59M a month, $28.78M a quarter. Under HSP-029 at 1.6%: $6.14M a month, about $74M a year.</p></div>" +
+      '<div class="grid-2" style="margin-bottom:16px">' +
+        '<div class="card moat"><h3>Moat and evidence</h3><p class="sub">Only claims written in the thesis, each with the source named there.</p><ul>' +
+          "<li>Brave, Ledger and the Zcash wallet already route through Intents. Thesis, section 8 (Competition). The same report, section 4, also says Brave, Ledger, SimpleSwap and the main NEAR wallets route through it, and that more than $2.6B of ZEC has settled through Intents, mostly from the Zashi wallet. The $2.6B line sits next to a Nansen figure for near.com but is not given its own source name.</li>" +
+          "<li>Confidential Intents held about $160M at the end of Q3 2026. Thesis, section 8. The report does not name an underlying data source for this figure.</li>" +
+          "<li>Intents uses a solver market instead of a bridge pool, so there is no wrapped asset or pool to drain. Thesis, section 8, the authors' description of the product.</li>" +
+          "<li>Intents held up while chain transactions fell about 85% from Nov 2025 to Nov 2026. Thesis, section 2 (H1). The chain figures are 4.52M transactions a day in Nov 2025 versus 685K in the 30 days to 4 Nov 2026 (NearBlocks via CoinPaprika, secondary). October 2026 Intents volume ($3.99B) beat the November 2025 spike ($3.66B), DefiLlama.</li>" +
+        "</ul></div>" +
+        '<div class="card catalysts"><h3>Catalysts and confirm signals</h3><p class="sub">Confirm signals are from the thesis, section 10. Status is live where a number can be computed; otherwise pending, manual.</p>' +
+        catalysts(b, c).map(r => {
+          const kind = r[1] === "met" ? "ok" : (r[1] === "not met" || r[1] === "in progress" ? (r[1] === "not met" ? "no" : "wait") : "wait");
+          return '<div class="cat-row"><div>' + esc(r[0]) + "</div><div>" + tag(kind === "ok" ? "ok" : (kind === "no" ? "fired" : "watch"), r[1]) + "</div><div class='note' style='margin:0'>" + esc(r[2]) + "</div></div>";
+        }).join("") +
+        "</div>" +
       "</div>";
+
+    const takeRows = (b.months || []).filter(r => r.m >= "2026-02" && r.take != null);
+    makeChart("cOvTake", {
+      type: "line",
+      data: { labels: takeRows.map(r => r.m), datasets: [{ data: takeRows.map(r => r.take), borderColor: accent(), pointBackgroundColor: takeRows.map(r => r.partial ? "#888" : accent()), pointRadius: 4, tension: 0.2 }] },
+      options: {
+        maintainAspectRatio: false,
+        scales: { y: { beginAtZero: true, title: { display: true, text: "bp" } } },
+        plugins: {
+          datalabels: { display: true, align: "top", color: ink(), font: { size: 9, weight: "600" }, formatter: v => v.toFixed(1) },
+          tooltip: { callbacks: { label: ctx => fmtBp(ctx.parsed.y) + " · " + (takeRows[ctx.dataIndex].live ? "live monthly sum" : "snapshot, " + SNAPSHOT_DATE) } }
+        }
+      },
+      plugins: window.ChartDataLabels ? [ChartDataLabels] : []
+    });
+    makeChart("cOvCap", {
+      type: "bar",
+      data: { labels: qs.map(q => q.q), datasets: [{ data: qs.map(q => q.capture == null ? null : q.capture * 100), backgroundColor: accent() }] },
+      options: {
+        maintainAspectRatio: false,
+        scales: { y: { beginAtZero: true, title: { display: true, text: "%" }, suggestedMax: 40 } },
+        plugins: {
+          datalabels: { display: true, anchor: "end", align: "end", color: ink(), font: { size: 10, weight: "600" }, formatter: v => v == null ? "" : v.toFixed(1) + "%" },
+          tooltip: { callbacks: { label: ctx => fmtPct(qs[ctx.dataIndex].capture) + " · complete quarter, revenue / fees" } }
+        }
+      },
+      plugins: window.ChartDataLabels ? [ChartDataLabels] : []
+    });
+    const cov30frozen = coverage(b.rev30d.v, FROZEN_SUPPLY * CAP_NOW * FROZEN_PRICE * 30 / 365);
+    const covLabels = qs.map(q => q.q).concat(["30 days at $3.51"]);
+    const covVals = qs.map(q => q.cov == null ? null : q.cov * 100).concat([cov30frozen == null ? null : cov30frozen * 100]);
+    const covCol = qs.map(() => "#b8b8b8").concat([accent()]);
+    makeChart("cOvCov", {
+      type: "bar",
+      data: { labels: covLabels, datasets: [{ data: covVals, backgroundColor: covCol }] },
+      options: {
+        maintainAspectRatio: false,
+        scales: { y: { beginAtZero: true, title: { display: true, text: "%" }, suggestedMax: 25 } },
+        plugins: {
+          annotation: { annotations: { kill: { type: "line", yMin: 15, yMax: 15, borderColor: "#b91c1c", borderDash: [6, 4], borderWidth: 1.5, label: { display: true, content: "15% kill line", position: "end", color: "#b91c1c", backgroundColor: "transparent", font: { size: 9 } } } } },
+          datalabels: { display: true, anchor: "end", align: "end", color: ink(), font: { size: 10, weight: "600" }, formatter: v => v == null ? "" : v.toFixed(1) + "%" },
+          tooltip: { callbacks: { label: ctx => (ctx.parsed.y == null ? "n/a" : ctx.parsed.y.toFixed(2) + "%") + " · issuance at $3.51 and 1.312B, 2.5%" } }
+        }
+      },
+      plugins: window.ChartDataLabels ? [ChartDataLabels] : []
+    });
+    startCountdown();
+  }
+
+
+  function renderBullPath() {
+    const b = current, c = computed(b);
+    const root = el("view-bullpath");
+    const issHsp = FROZEN_SUPPLY * CAP_HSP * FROZEN_PRICE;
+    const takePct = c.take == null ? 0 : Math.min(100, (c.take / BULL_TAKE_BP) * 100);
+    const volPct = b.vol30d.v == null ? 0 : Math.min(100, (b.vol30d.v / BULL_MONTHLY_VOL) * 100);
+    const bullRev = BULL_MONTHLY_VOL * (BULL_TAKE_BP / 10000) * 12;
+    const curAnnual = c.take != null ? b.vol30d.v * (c.take / 10000) * (365 / 30) : null;
+    const latestFull = [...(b.months || [])].reverse().find(r => r.vol && !r.partial);
+    root.innerHTML =
+      '<p class="lead">The thesis asks how much Intents volume it takes for buybacks to match issuance. Even the base case in the scenario table still dilutes holders. Only the bull case flips it: about $10B a month at 7 bp, under HSP-029, or $84M a year against about $74M of issuance at $3.51 (114%). These are illustrative paths to end-2028, not forecasts or price targets (thesis, section 7).</p>' +
+      q4HeadlineHTML(b, c) +
+      '<div class="card" style="margin-bottom:12px"><h3>What must be true for buybacks to beat issuance</h3>' +
+        '<p class="sub">Three conditions from the thesis. HSP-029 "cuts the target by a third." The bull row in the scenario table is $10B a month at 7 bp. Progress bars use today\'s live or snapshot figures, with the method on each row. HSP-029 adoption is not scored as a percentage because we cannot measure validator adoption from these APIs.</p>' +
+        '<div class="bar-row"><div class="bar-head"><strong>1. HSP-029 adopted, cutting issuance by a third</strong><span>pending, manual</span></div>' +
+        '<p class="note">Target yearly issuance under HSP-029 at $3.51 and 1.312B supply is ' + fmtB(issHsp) + " (about $74M), versus " + fmtB(FROZEN_SUPPLY * CAP_NOW * FROZEN_PRICE) + " at the current 2.5% cap. Approved 2 Nov 2026 (The Block, snapshot). The thesis (section 6) says a veto window remains, and validators still have to adopt a cut that lowers their own income by about 36%. No bar is filled, because filling one would invent a number we do not have.</p></div>" +
+        '<div class="bar-row"' + tip("30-day take rate / 7 bp, the bull-case take rate in the thesis scenario table.") + '><div class="bar-head"><strong>2. Take rate about 7 bp</strong><span>' + fmtBp(c.take) + " of 7.00 bp (" + takePct.toFixed(0) + "% of the way)</span></div>" +
+        '<div class="progress"><span style="width:' + takePct.toFixed(1) + '%"></span></div>' +
+        '<p class="note">Bar = current 30-day take rate divided by 7 bp. The 30-day rate is protocol revenue / volume. October 2026, the last complete month in the snapshot table, was 5.49 bp. No complete month or quarter has cleared 7 bp.</p></div>' +
+        '<div class="bar-row"' + tip("30-day Intents volume / $10B, the bull-case monthly volume in the thesis scenario table.") + '><div class="bar-head"><strong>3. Volume about $10B a month</strong><span>' + fmtB(b.vol30d.v) + " of $10.00B (" + volPct.toFixed(0) + "% of the way)</span></div>" +
+        '<div class="progress"><span style="width:' + volPct.toFixed(1) + '%"></span></div>' +
+        '<p class="note">Bar = 30-day Intents volume versus the $10B monthly bull case, used as a one-month pace. The record complete month is still $4.80B (Sep 2026)' +
+        (latestFull ? (". Latest complete month, " + latestFull.m + ", is " + fmtB(latestFull.vol)) : "") +
+        ". " + srcTag(b.vol30d) + "</p></div>" +
+        '<p>Together, $10B a month at 7 bp is ' + fmtB(bullRev) + " a year, or " + fmtPct(bullRev / issHsp, 0) + " of HSP-029 issuance at $3.51. At the current 30-day pace, annualised revenue is " + (curAnnual == null ? "n/a" : fmtB(curAnnual)) + ", or " + (curAnnual == null ? "n/a" : fmtPct(curAnnual / issHsp, 0)) + " of that $74M issuance line. That annualisation is a run rate, not a forecast.</p>" +
+      "</div>" +
+      '<div class="card"><h3>Catalysts and confirm signals</h3><p class="sub">The same checklist as Overview, from thesis section 10.</p>' +
+      catalysts(b, c).map(r => {
+        const kind = r[1] === "met" ? "ok" : (r[1] === "not met" ? "fired" : "watch");
+        return '<div class="cat-row"><div>' + esc(r[0]) + "</div><div>" + tag(kind, r[1]) + "</div><div class='note' style='margin:0'>" + esc(r[2]) + "</div></div>";
+      }).join("") +
+      "</div>";
+    startCountdown();
   }
 
   function renderVolume() {
@@ -1352,6 +1604,7 @@
     const id = v ? v.id.replace("view-", "") : "overview";
     const map = {
       overview: renderOverview,
+      bullpath: renderBullPath,
       volume: renderVolume,
       capture: renderCapture,
       issuance: renderIssuance,
