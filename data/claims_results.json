@@ -1,5 +1,5 @@
 {
-  "run_time": "2026-11-13T20:08:10Z",
+  "run_time": "2026-11-13T22:55:19Z",
   "tolerance_rule": "Dashboard rule, not a tolerance published in the thesis or brief. Green if the absolute relative difference |live-frozen|/|frozen| is at most 5%. Amber if it is more than 5% and at most 15%. Red if it is more than 15%. Unmeasured claims are not graded. Holders revenue is summed through 3 Nov 2026. 30-day coverage is retested at $3.51 and 1.312B supply.",
   "frozen_as_of": "13 Nov 2026",
   "errors": {},
@@ -173,10 +173,10 @@
       "id": "buyback_wallet",
       "claim": "Buyback wallet balance",
       "frozen_value": 1770000.0,
-      "live_value": 2279017.142302966,
+      "live_value": 2279302.1411727867,
       "unit": "NEAR",
       "status": "red",
-      "relative_difference": 0.28758030638585663,
+      "relative_difference": 0.28774132269648967,
       "source": "NEAR RPC view_account buybacks.multisignature.near",
       "note": "Frozen 1.77M NEAR is from revenue.near.org, which marks its figures illustrative. Live is the on-chain amount field."
     },
@@ -238,7 +238,7 @@
   ],
   "onchain_buyback": {
     "account": "buybacks.multisignature.near",
-    "rpc_amount_near": 2279017.142302966,
+    "rpc_amount_near": 2279302.1411727867,
     "rpc_error": null,
     "note": "On-chain amount from view_account. This is not a cost basis for holders revenue."
   }
